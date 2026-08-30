@@ -82,7 +82,7 @@ function enterCreateRoom() {
   // Open WebSocket connection as host
   if (hostWs) hostWs.close();
   const wsProto = getWsProtocol();
-  hostWs = new WebSocket(`${wsProto}//${location.host}?role=host&room=${currentRoomCode}`);
+  hostWs = new WebSocket(`${wsProto}//${location.host}/ws?role=host&room=${currentRoomCode}`);
   
   hostWs.onopen = () => {
     console.log('Host connected to signaling server');
@@ -232,7 +232,7 @@ joinContinueBtn.addEventListener('click', () => {
   // Open WebSocket connection as listener
   if (listenerWs) listenerWs.close();
   const wsProto = getWsProtocol();
-  listenerWs = new WebSocket(`${wsProto}//${location.host}?role=listener&room=${code}`);
+  listenerWs = new WebSocket(`${wsProto}//${location.host}/ws?role=listener&room=${code}`);
   
   listenerWs.onopen = () => {
     console.log('Listener connected to signaling server');

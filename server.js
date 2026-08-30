@@ -7,9 +7,20 @@ const crypto = require('crypto');
 
 const app = express();
 const server = http.createServer(app);
-const wss = new WebSocket.Server({ server });
+const wss = new WebSocket.Server({ noServer: true });
 
 app.use(express.static(path.join(__dirname, 'public')));
+
+// Handle WebSocket upgrade requests on /ws path
+server.on('upgrade', (request, socket, head) => {
+  if (request.url.startsWith('/ws')) {
+    wss.handleUpgrade(request, socket, head, (ws) => {
+      wss.emit('connection', ws, request);
+    });
+  } else {
+    socket.destroy();
+  }
+});
 
 let hostSocket = null;
 const listeners = new Map(); // id -> ws
