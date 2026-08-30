@@ -184,8 +184,14 @@ function enterCreateRoom() {
       if (hostStream) {
         createPeerConnectionForListener(msg.id, hostStream.getTracks()[0]);
       }
+    } else if (msg.type === 'member-info') {
+      // Update listener info with name and avatar
+      membersMap.set(msg.id, { name: msg.name, avatar: msg.avatar });
+      updateHostMembersList();
     } else if (msg.type === 'listener-leave') {
       removeListenerRow(msg.id);
+      membersMap.delete(msg.id);
+      updateHostMembersList();
       const pc = hostPeerConnections.get(msg.id);
       if (pc) {
         pc.close();
@@ -461,6 +467,13 @@ joinContinueBtn.addEventListener('click', () => {
     if (msg.type === 'welcome') {
       listenerId = msg.id;
       console.log('Listener ID:', msg.id);
+      // Send profile information to host
+      sendListenerMessage({
+        type: 'member-info',
+        id: msg.id,
+        name: userProfile.name,
+        avatar: userProfile.avatar
+      });
       enterConnectedState();
     } else if (msg.type === 'offer') {
       // Host sent an offer with audio
@@ -478,6 +491,9 @@ joinContinueBtn.addEventListener('click', () => {
       listenerPeerConnection = null;
       listenerWs.close();
       setTimeout(() => showView('view-landing'), 2000);
+    } else if (msg.type === 'members-update') {
+      // Update members list
+      updateMembersList(msg.members);
     }
   };
 
@@ -721,3 +737,42 @@ window.addEventListener('beforeunload', () => {
     }
   });
 })();
+
+// ---------- Members List Management ----------
+let membersMap = new Map(); // id -> {name, avatar}
+
+function updateMembersList(members) {
+  // Update members map
+  membersMap.clear();
+  members.forEach(member => {
+    membersMap.set(member.id, { name: member.name, avatar: member.avatar });
+  });
+  
+  // Update UI display
+  const membersList = document.getElementById('membersList');
+  if (membersList) {
+    membersList.innerHTML = '';
+    membersMap.forEach((info, id) => {
+      const memberEl = document.createElement('div');
+      memberEl.className = 'member-item';
+      memberEl.innerHTML = `<span>${info.avatar}</span><span class="member-name">${info.name}</span>`;
+      membersList.appendChild(memberEl);
+    });
+  }
+}
+
+function updateHostMembersList() {
+  // Update the listener list with member info
+  document.querySelectorAll('[data-listener-id]').forEach(row => {
+    const id = row.dataset.listenerId;
+    const member = membersMap.get(id);
+    if (member) {
+      const nameEl = row.querySelector('.member-name');
+      if (nameEl) {
+        nameEl.textContent = member.name;
+      } else {
+        row.innerHTML = `<span class="member-avatar">${member.avatar}</span><span class="member-name">${member.name}</span>`;
+      }
+    }
+  });
+}

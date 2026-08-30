@@ -24,6 +24,7 @@ server.on('upgrade', (request, socket, head) => {
 
 let hostSocket = null;
 const listeners = new Map(); // id -> ws
+const memberInfo = new Map(); // id -> {name, avatar}
 
 function send(ws, obj) {
   if (ws && ws.readyState === WebSocket.OPEN) {
@@ -35,6 +36,20 @@ function broadcastStatus() {
   const status = { type: 'status', hostConnected: !!hostSocket, listenerCount: listeners.size };
   send(hostSocket, status);
   for (const ws of listeners.values()) send(ws, status);
+}
+
+function broadcastMembersList() {
+  // Send current members list to all connected users
+  const members = Array.from(memberInfo.entries()).map(([id, info]) => ({
+    id,
+    name: info.name,
+    avatar: info.avatar
+  }));
+  
+  send(hostSocket, { type: 'members-update', members });
+  for (const ws of listeners.values()) {
+    send(ws, { type: 'members-update', members });
+  }
 }
 
 wss.on('connection', (ws, req) => {
@@ -86,6 +101,7 @@ wss.on('connection', (ws, req) => {
         }
         hostSocket = null;
         listeners.clear(); // Clear all listeners when host disconnects
+        memberInfo.clear(); // Clear member info
       }
       broadcastStatus();
     });
@@ -107,6 +123,13 @@ wss.on('connection', (ws, req) => {
       if (msg.type === 'answer' || msg.type === 'ice-candidate') {
         msg.from = id;
         send(hostSocket, msg);
+      } else if (msg.type === 'member-info') {
+        // Store member info and broadcast to all
+        memberInfo.set(id, { name: msg.name, avatar: msg.avatar });
+        // Broadcast to host
+        if (hostSocket) send(hostSocket, { type: 'member-info', id, name: msg.name, avatar: msg.avatar });
+        // Broadcast to all listeners
+        broadcastMembersList();
       } else {
         // Other messages
         msg.id = id;
@@ -116,8 +139,10 @@ wss.on('connection', (ws, req) => {
 
     ws.on('close', () => {
       listeners.delete(id);
+      memberInfo.delete(id);
       console.log(`Listener ${id} disconnected. Total: ${listeners.size}`);
       if (hostSocket) send(hostSocket, { type: 'listener-leave', id });
+      broadcastMembersList();
       broadcastStatus();
     });
   }
