@@ -21,6 +21,7 @@ function showView(id) {
     if (listenerWs) listenerWs.close();
     hostWs = null;
     listenerWs = null;
+    // Don't clear room state here - let endPartyBtn handle it
   }
 }
 document.querySelectorAll('[data-nav]').forEach(el => {
@@ -41,12 +42,35 @@ function generateRoomCode(length = 6) {
 }
 
 let currentRoomCode = null;
+let isBroadcasting = false; // track if host is actively broadcasting
 let hostStream = null; // captured tab/system audio, set when broadcasting starts
 let hostWs = null; // WebSocket connection for host
 let listenerWs = null; // WebSocket connection for listener
 let hostPeerConnections = new Map(); // id -> RTCPeerConnection for host
 let listenerPeerConnection = null; // RTCPeerConnection for listener
 let listenerId = null; // listener's own ID from server
+
+// ---------- Room state persistence ----------
+function saveRoomState() {
+  if (currentRoomCode) {
+    sessionStorage.setItem('roomCode', currentRoomCode);
+  }
+}
+
+function restoreRoomState() {
+  const savedCode = sessionStorage.getItem('roomCode');
+  if (savedCode) {
+    currentRoomCode = savedCode;
+    return true;
+  }
+  return false;
+}
+
+function clearRoomState() {
+  sessionStorage.removeItem('roomCode');
+  currentRoomCode = null;
+  isBroadcasting = false;
+}
 
 // ---------- WebSocket connection ----------
 function getWsProtocol() {
@@ -88,6 +112,7 @@ const createErrEl = document.getElementById('createErr');
 
 function enterCreateRoom() {
   currentRoomCode = generateRoomCode();
+  saveRoomState(); // Save room code for refresh
   freqCodeEl.textContent = currentRoomCode.slice(0, 3) + ' ' + currentRoomCode.slice(3);
 
   // The QR encodes a joinable URL: whoever scans it lands directly on the
@@ -291,6 +316,7 @@ document.getElementById('endPartyBtn').addEventListener('click', () => {
   hostStream = null;
   if (hostWs) hostWs.close();
   hostWs = null;
+  clearRoomState(); // Clear saved room state
   showView('view-landing');
 });
 
@@ -457,6 +483,60 @@ async function handleOfferFromHost(offer) {
   const code = params.get('code');
   if (code && code.length === 6) {
     enterJoinRoom(code.toUpperCase());
+  }
+})();
+
+// ---------- Restore room state on page load ----------
+(function restoreState() {
+  if (restoreRoomState()) {
+    // Reconnect to the same room if it was saved
+    console.log('Restoring room:', currentRoomCode);
+    
+    // Update UI to show the room
+    freqCodeEl.textContent = currentRoomCode.slice(0, 3) + ' ' + currentRoomCode.slice(3);
+    listenerListEl.innerHTML = '';
+    updateLobbyCount(0);
+    createErrEl.textContent = '';
+    startPartyBtn.disabled = false;
+    startPartyBtn.textContent = 'Start the Party';
+    
+    showView('view-create');
+    
+    // Reconnect WebSocket
+    if (hostWs) hostWs.close();
+    const wsProto = getWsProtocol();
+    hostWs = new WebSocket(`${wsProto}//${location.host}/ws?role=host&room=${currentRoomCode}`);
+    
+    hostWs.onopen = () => {
+      console.log('Host reconnected to signaling server');
+    };
+
+    hostWs.onmessage = (event) => {
+      const msg = JSON.parse(event.data);
+      if (msg.type === 'listener-join') {
+        addListenerRow(msg.id, 'Guest ' + (listenerListEl.children.length + 1));
+        if (hostStream) {
+          createPeerConnectionForListener(msg.id, hostStream.getTracks()[0]);
+        }
+      } else if (msg.type === 'listener-leave') {
+        removeListenerRow(msg.id);
+        const pc = hostPeerConnections.get(msg.id);
+        if (pc) {
+          pc.close();
+          hostPeerConnections.delete(msg.id);
+        }
+      }
+    };
+
+    hostWs.onerror = (err) => {
+      console.error('Host WebSocket error:', err);
+      createErrEl.textContent = 'Failed to reconnect to server';
+    };
+
+    hostWs.onclose = () => {
+      console.log('Host disconnected from server');
+      hostWs = null;
+    };
   }
 })();
 
