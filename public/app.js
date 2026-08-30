@@ -50,6 +50,38 @@ let hostPeerConnections = new Map(); // id -> RTCPeerConnection for host
 let listenerPeerConnection = null; // RTCPeerConnection for listener
 let listenerId = null; // listener's own ID from server
 
+// ---------- User Profile Management ----------
+const AVATAR_OPTIONS = ['🎵', '🎧', '🎤', '🎸', '🎹', '🎺', '🎻', '🥁', '🎼', '🎶'];
+const COOL_NAMES_ADJECTIVES = ['Sonic', 'Echo', 'Harmony', 'Rhythm', 'Melody', 'Beatbox', 'Jazz', 'Groove', 'Vibes', 'Lyric'];
+const COOL_NAMES_NOUNS = ['Listener', 'Maestro', 'Fan', 'Vibe', 'Wave', 'Note', 'Sound', 'Frequency', 'Tone', 'Chord'];
+
+function generateCoolName() {
+  const adj = COOL_NAMES_ADJECTIVES[Math.floor(Math.random() * COOL_NAMES_ADJECTIVES.length)];
+  const noun = COOL_NAMES_NOUNS[Math.floor(Math.random() * COOL_NAMES_NOUNS.length)];
+  const num = Math.floor(Math.random() * 100);
+  return `${adj}${noun}${num}`;
+}
+
+function getOrCreateProfile() {
+  let profile = JSON.parse(localStorage.getItem('userProfile'));
+  if (!profile) {
+    profile = {
+      name: generateCoolName(),
+      avatar: AVATAR_OPTIONS[Math.floor(Math.random() * AVATAR_OPTIONS.length)]
+    };
+    localStorage.setItem('userProfile', JSON.stringify(profile));
+  }
+  return profile;
+}
+
+function updateProfile(name, avatar) {
+  const profile = { name, avatar };
+  localStorage.setItem('userProfile', JSON.stringify(profile));
+  return profile;
+}
+
+let userProfile = getOrCreateProfile();
+
 // ---------- Room state persistence ----------
 function saveRoomState() {
   if (currentRoomCode) {
@@ -626,3 +658,66 @@ window.addEventListener('beforeunload', () => {
     listenerPeerConnection.close();
   }
 });
+
+// ---------- Profile Modal Initialization ----------
+(function initProfileModal() {
+  const profileModal = document.getElementById('profileModal');
+  const closeProfileBtn = document.getElementById('closeProfileBtn');
+  const profileNameInput = document.getElementById('profileName');
+  const generateNameBtn = document.getElementById('generateNameBtn');
+  const avatarGrid = document.getElementById('avatarGrid');
+  const saveProfileBtn = document.getElementById('saveProfileBtn');
+
+  // Create avatar options
+  AVATAR_OPTIONS.forEach(avatar => {
+    const option = document.createElement('button');
+    option.className = 'avatar-option';
+    option.textContent = avatar;
+    option.type = 'button';
+    if (avatar === userProfile.avatar) {
+      option.classList.add('selected');
+    }
+    option.addEventListener('click', () => {
+      document.querySelectorAll('.avatar-option').forEach(opt => opt.classList.remove('selected'));
+      option.classList.add('selected');
+    });
+    avatarGrid.appendChild(option);
+  });
+
+  // Initialize profile display
+  profileNameInput.value = userProfile.name;
+
+  // Close modal
+  closeProfileBtn.addEventListener('click', () => {
+    profileModal.style.display = 'none';
+  });
+
+  // Generate new name
+  generateNameBtn.addEventListener('click', () => {
+    const newName = generateCoolName();
+    profileNameInput.value = newName;
+  });
+
+  // Save profile
+  saveProfileBtn.addEventListener('click', () => {
+    const newName = profileNameInput.value.trim() || generateCoolName();
+    const selectedAvatar = document.querySelector('.avatar-option.selected');
+    const newAvatar = selectedAvatar ? selectedAvatar.textContent : userProfile.avatar;
+    
+    userProfile = updateProfile(newName, newAvatar);
+    profileModal.style.display = 'none';
+  });
+
+  // Expose function to open profile modal
+  window.openProfileModal = () => {
+    profileNameInput.value = userProfile.name;
+    profileModal.style.display = 'flex';
+  };
+
+  // Close modal when clicking outside
+  profileModal.addEventListener('click', (e) => {
+    if (e.target === profileModal) {
+      profileModal.style.display = 'none';
+    }
+  });
+})();
