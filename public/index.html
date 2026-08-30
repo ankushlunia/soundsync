@@ -3,10 +3,13 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<title>Silent Broadcast</title>
+<meta name="description" content="SoundSync — Watch or listen together in the same room. Everyone hears it through their own headphones, no sound in the air.">
+<title>SoundSync</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎧</text></svg>">
 <link rel="stylesheet" href="style.css">
 <link rel="stylesheet" href="profile-modal.css">
 <script src="vendor/qrcode.min.js"></script>
+<script src="vendor/html5-qrcode.min.js"></script>
 </head>
 <body>
 <div class="app-shell">
@@ -15,7 +18,7 @@
   <section id="view-landing" class="view active">
     <div class="dial"><div class="dial__needle"></div></div>
     <p class="eyebrow">Private · Local Wi-Fi · No App Needed</p>
-    <h1 class="wordmark">Silent Broadcast</h1>
+    <h1 class="wordmark">SoundSync</h1>
     <p class="tagline">Watch or listen together in the same room — everyone hears it through their own headphones, no sound in the air.</p>
 
     <div class="role-grid">
@@ -53,10 +56,13 @@
   <!-- ============ CREATE ROOM (host) ============ -->
   <section id="view-create" class="view">
     <div class="step-header">
-      <button class="back-btn" data-nav="view-landing" aria-label="Back">
+      <button class="back-btn" id="hostBackBtn" aria-label="Back">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
       </button>
       <span class="step-title">Room Created</span>
+      <button class="profile-btn" id="hostProfileBtn" aria-label="Profile">
+        <span id="hostProfileAvatar">🎵</span>
+      </button>
     </div>
 
     <div class="freq-panel">
@@ -77,11 +83,51 @@
       <p class="empty-hint" id="emptyHint">Waiting for people to join — share the code or QR above.</p>
     </div>
 
-    <button class="btn btn-primary" id="startPartyBtn">Start the Party</button>
-    <button class="btn btn-secondary" id="changeTabAudioBtn" style="display:none; margin-top:10px;">Change Tab Audio</button>
-    <div class="mic-note">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2v20M2 12h20"/></svg>
-      <span>When you tap Start, your browser will ask you to pick the movie's tab and share its audio. Make sure "Share tab audio" is checked.</span>
+    <div class="audio-source-panel">
+      <label class="source-label" for="audioSourceSelect">Audio Source:</label>
+      <select id="audioSourceSelect" class="source-select">
+        <option value="tab">🖥️ Tab / System Audio (Desktop)</option>
+        <option value="mic">🎙️ Device Microphone / Line-In (iPhone, Android, TV)</option>
+        <option value="file">📁 Play Audio File (iPhone, Android, TV, Desktop)</option>
+        <option value="url">📻 Audio URL Stream (All Devices)</option>
+      </select>
+    </div>
+
+    <!-- Mode Tab -->
+    <div id="sourceModeTab" class="source-mode-info">
+      <div class="mic-note">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2v20M2 12h20"/></svg>
+        <span>Pick the video tab and check "Share tab audio". (Desktop Chrome/Edge/Safari).</span>
+      </div>
+    </div>
+
+    <!-- Mode Mic -->
+    <div id="sourceModeMic" class="source-mode-info" style="display:none;">
+      <div class="mic-note">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="10"/><path d="M12 8v8M8 12h8"/></svg>
+        <span>Broadcasts room/TV audio using your phone, tablet, or TV microphone.</span>
+      </div>
+    </div>
+
+    <!-- Mode File -->
+    <div id="sourceModeFile" class="source-mode-info" style="display:none;">
+      <input type="file" id="hostAudioFileInput" accept="audio/*" style="display:none;">
+      <button class="btn btn-secondary" id="selectAudioFileBtn" style="width:100%; margin-bottom:10px;">📁 Select Audio / Music File</button>
+      <div id="audioPlayerContainer" style="display:none; background: var(--bg-panel); padding: 12px; border-radius: var(--radius-md); border: 1px solid var(--border-subtle); margin-bottom: 10px;">
+        <p id="fileNameDisplay" style="font-size: 12px; color: var(--amber); margin: 0 0 8px 0; word-break: break-all;"></p>
+        <audio id="hostAudioPlayer" controls style="width: 100%; height: 36px;"></audio>
+      </div>
+    </div>
+
+    <!-- Mode URL -->
+    <div id="sourceModeUrl" class="source-mode-info" style="display:none;">
+      <input type="url" id="hostAudioUrlInput" placeholder="Enter MP3 / Audio Stream URL (https://...)" class="url-input">
+    </div>
+
+    <button class="btn btn-primary" id="startPartyBtn">Start Broadcast</button>
+    <div class="host-controls" id="hostControls" style="display:none;">
+      <button class="btn btn-secondary" id="changeTabAudioBtn">🔄 Change Audio Track</button>
+      <button class="btn btn-secondary" id="muteHostSpeakersBtn">🔊 Mute Speakers</button>
     </div>
     <p class="err-text" id="createErr"></p>
 
@@ -91,7 +137,7 @@
   <!-- ============ JOIN ROOM ============ -->
   <section id="view-join" class="view">
     <div class="step-header">
-      <button class="back-btn" data-nav="view-landing" aria-label="Back">
+      <button class="back-btn" id="joinBackBtn" aria-label="Back">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
       </button>
       <span class="step-title">Join a Room</span>
@@ -117,15 +163,24 @@
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3zM19 14h2v2h-2zM14 19h2v2h-2zM19 19h2v2h-2z"/></svg>
       Scan QR Code
     </button>
+    <input type="file" id="qrFileInput" accept="image/*" style="display:none;">
+    <div id="qr-reader" style="display:none; margin-top: 16px;"></div>
+    <div style="display: flex; gap: 8px; margin-top: 10px;">
+      <button class="btn btn-secondary" id="uploadQrBtn" style="display:none; flex:1;">📷 Upload QR Image</button>
+      <button class="btn btn-secondary" id="stopScanBtn" style="display:none; flex:1;">Stop Scanner</button>
+    </div>
   </section>
 
   <!-- ============ WAITING / CONNECTED (listener) ============ -->
   <section id="view-waiting" class="view">
     <div class="step-header">
-      <button class="back-btn" data-nav="view-landing" aria-label="Back">
+      <button class="back-btn" id="listenerBackBtn" aria-label="Back">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
       </button>
       <span class="step-title">Room <span id="waitingCode"></span></span>
+      <button class="profile-btn" id="listenerProfileBtn" aria-label="Profile">
+        <span id="listenerProfileAvatar">🎵</span>
+      </button>
     </div>
 
     <div class="status-panel" id="statusPanel">
@@ -139,6 +194,22 @@
       </div>
       <p class="status-title" id="statusTitle">Waiting for the host to start…</p>
       <p class="status-sub" id="statusSub">You're in the room. Once the host starts the party, audio will begin automatically — put your headphones on now.</p>
+
+      <!-- Sync status badge -->
+      <div class="sync-badge" id="syncBadge" style="display:none;">
+        <span class="sync-dot" id="syncDot"></span>
+        <span id="syncText">Syncing…</span>
+      </div>
+
+      <!-- Volume control -->
+      <div class="volume-control" id="volumeControl" style="display:none;">
+        <label class="volume-label" for="volumeSlider">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
+        </label>
+        <input type="range" id="volumeSlider" min="0" max="100" value="100" class="volume-slider">
+        <span class="volume-value" id="volumeValue">100%</span>
+      </div>
+
       <div class="members-panel">
         <div class="members-panel-title">Connected Members</div>
         <div id="membersList"></div>
@@ -147,6 +218,20 @@
     </div>
   </section>
 
+</div>
+
+<!-- ============ CONFIRMATION MODALS ============ -->
+<div id="confirmationModal" class="modal" style="display:none;">
+  <div class="modal-content">
+    <div class="modal-body" style="text-align: center;">
+      <h3 id="confirmTitle" style="margin-top: 0; color: var(--text-primary);">Are you sure?</h3>
+      <p id="confirmMessage" style="color: var(--text-secondary); margin: 16px 0;">This action cannot be undone.</p>
+    </div>
+    <div class="modal-footer" style="justify-content: center; gap: 12px;">
+      <button class="btn btn-secondary" id="confirmCancelBtn">Cancel</button>
+      <button class="btn btn-danger" id="confirmYesBtn">Yes, Proceed</button>
+    </div>
+  </div>
 </div>
 
 <!-- ============ PROFILE MODAL ============ -->

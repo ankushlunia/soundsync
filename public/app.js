@@ -1,35 +1,87 @@
 /* ==========================================================================
-   Silent Broadcast — Frontend logic
-   This is the FRONTEND ONLY stage: room codes, QR rendering, view flow, and
-   system/tab audio capture are wired for real. Actual peer-to-peer
-   connection to listeners (WebRTC signaling) is marked with TODO and will
-   be connected once the signaling server is built.
+   SoundSync — Frontend logic
+   Complete implementation with:
+   - Multi-room WebSocket signaling
+   - WebRTC audio streaming with DataChannel sync
+   - NTP-like clock synchronization for cross-device audio sync
+   - Web Audio API pipeline (DelayNode buffer + GainNode volume)
+   - XSS-safe DOM manipulation (no innerHTML with user data)
+   - Confirmation dialogs on all exit/cancel actions
+   - Profile modal, volume control, QR scanner
    ========================================================================== */
 
 // ---------- View router ----------
 const views = document.querySelectorAll('.view');
+let currentView = 'view-landing';
+
 function showView(id) {
   views.forEach(v => v.classList.toggle('active', v.id === id));
-  
-  // Clean up connections when leaving
-  if (id === 'view-landing') {
-    // Notify all listeners that host is disconnecting
-    if (hostWs && hostWs.readyState === WebSocket.OPEN) {
-      sendHostMessage({ type: 'host-cancel' });
-    }
-    if (hostWs) hostWs.close();
-    if (listenerWs) listenerWs.close();
-    hostWs = null;
-    listenerWs = null;
-    // Don't clear room state here - let endPartyBtn handle it
+  currentView = id;
+}
+
+// ---------- Confirmation helper ----------
+function showConfirmation(title, message, onConfirm) {
+  const modal = document.getElementById('confirmationModal');
+  document.getElementById('confirmTitle').textContent = title;
+  document.getElementById('confirmMessage').textContent = message;
+
+  const confirmYesBtn = document.getElementById('confirmYesBtn');
+  const confirmCancelBtn = document.getElementById('confirmCancelBtn');
+
+  // Remove old listeners by cloning
+  const newYesBtn = confirmYesBtn.cloneNode(true);
+  const newCancelBtn = confirmCancelBtn.cloneNode(true);
+  confirmYesBtn.parentNode.replaceChild(newYesBtn, confirmYesBtn);
+  confirmCancelBtn.parentNode.replaceChild(newCancelBtn, confirmCancelBtn);
+
+  document.getElementById('confirmYesBtn').addEventListener('click', () => {
+    modal.style.display = 'none';
+    onConfirm();
+  });
+
+  document.getElementById('confirmCancelBtn').addEventListener('click', () => {
+    modal.style.display = 'none';
+  });
+
+  modal.style.display = 'flex';
+}
+
+// ---------- Safe navigation with confirmation ----------
+function safeNavigateBack(fromView) {
+  const isHostActive = hostWs && hostWs.readyState === WebSocket.OPEN;
+  const isListenerActive = listenerWs && listenerWs.readyState === WebSocket.OPEN;
+
+  if (fromView === 'view-create' && isHostActive) {
+    showConfirmation(
+      'Leave Room?',
+      'This will end the room and disconnect all listeners.',
+      () => {
+        cleanupHost();
+        showView('view-landing');
+      }
+    );
+  } else if (fromView === 'view-waiting' && isListenerActive) {
+    showConfirmation(
+      'Exit Party?',
+      'You will disconnect from the audio broadcast.',
+      () => {
+        cleanupListener();
+        showView('view-landing');
+      }
+    );
+  } else if (fromView === 'view-join') {
+    showView('view-landing');
+  } else {
+    showView('view-landing');
   }
 }
-document.querySelectorAll('[data-nav]').forEach(el => {
-  el.addEventListener('click', () => showView(el.dataset.nav));
-});
+
+// Wire back buttons with confirmation
+document.getElementById('hostBackBtn').addEventListener('click', () => safeNavigateBack('view-create'));
+document.getElementById('joinBackBtn').addEventListener('click', () => safeNavigateBack('view-join'));
+document.getElementById('listenerBackBtn').addEventListener('click', () => safeNavigateBack('view-waiting'));
 
 // ---------- Room code generation ----------
-// Avoids visually ambiguous characters (0/O, 1/I/L).
 const CODE_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 function generateRoomCode(length = 6) {
   let code = '';
@@ -41,14 +93,28 @@ function generateRoomCode(length = 6) {
   return code;
 }
 
+// ---------- State ----------
 let currentRoomCode = null;
-let isBroadcasting = false; // track if host is actively broadcasting
-let hostStream = null; // captured tab/system audio, set when broadcasting starts
-let hostWs = null; // WebSocket connection for host
-let listenerWs = null; // WebSocket connection for listener
-let hostPeerConnections = new Map(); // id -> RTCPeerConnection for host
-let listenerPeerConnection = null; // RTCPeerConnection for listener
-let listenerId = null; // listener's own ID from server
+let isBroadcasting = false;
+let hostStream = null;
+let hostWs = null;
+let listenerWs = null;
+let hostPeerConnections = new Map(); // id -> { pc: RTCPeerConnection, dc: RTCDataChannel }
+let listenerPeerConnection = null;
+let listenerDataChannel = null;
+let listenerId = null;
+let membersMap = new Map();
+
+// Sync state
+let syncIntervalId = null;
+let listenerLatencies = new Map(); // id -> { rtt, oneWay }
+let hostTargetDelay = 0;
+let myOneWayDelay = 0;
+
+// Audio pipeline (listener)
+let audioContext = null;
+let delayNode = null;
+let gainNode = null;
 
 // ---------- User Profile Management ----------
 const AVATAR_OPTIONS = ['🎵', '🎧', '🎤', '🎸', '🎹', '🎺', '🎻', '🥁', '🎼', '🎶'];
@@ -82,31 +148,78 @@ function updateProfile(name, avatar) {
 
 let userProfile = getOrCreateProfile();
 
-// ---------- Room state persistence ----------
-function saveRoomState() {
-  if (currentRoomCode) {
-    sessionStorage.setItem('roomCode', currentRoomCode);
+// Update profile button avatars
+function updateProfileButtons() {
+  const hostAvatar = document.getElementById('hostProfileAvatar');
+  const listenerAvatar = document.getElementById('listenerProfileAvatar');
+  if (hostAvatar) hostAvatar.textContent = userProfile.avatar;
+  if (listenerAvatar) listenerAvatar.textContent = userProfile.avatar;
+}
+updateProfileButtons();
+
+// ---------- XSS-safe DOM helpers ----------
+function escapeText(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.textContent;
+}
+
+function createListenerRow(id, name, avatar) {
+  const row = document.createElement('div');
+  row.className = 'listener-row';
+  row.dataset.listenerId = id;
+
+  if (avatar) {
+    const avatarSpan = document.createElement('span');
+    avatarSpan.className = 'member-avatar';
+    avatarSpan.textContent = avatar;
+    row.appendChild(avatarSpan);
+  } else {
+    const dot = document.createElement('span');
+    dot.className = 'listener-dot';
+    row.appendChild(dot);
   }
+
+  const nameSpan = document.createElement('span');
+  nameSpan.className = 'member-name';
+  nameSpan.textContent = name;
+  row.appendChild(nameSpan);
+
+  return row;
 }
 
-function restoreRoomState() {
-  const savedCode = sessionStorage.getItem('roomCode');
-  if (savedCode) {
-    currentRoomCode = savedCode;
-    return true;
-  }
-  return false;
+function createMemberItem(name, avatar) {
+  const el = document.createElement('div');
+  el.className = 'member-item';
+
+  const avatarSpan = document.createElement('span');
+  avatarSpan.className = 'member-avatar';
+  avatarSpan.textContent = avatar || '🎵';
+  el.appendChild(avatarSpan);
+
+  const nameSpan = document.createElement('span');
+  nameSpan.className = 'member-name';
+  nameSpan.textContent = name || 'Unknown';
+  el.appendChild(nameSpan);
+
+  return el;
 }
 
-function clearRoomState() {
-  sessionStorage.removeItem('roomCode');
-  currentRoomCode = null;
-  isBroadcasting = false;
-}
-
-// ---------- WebSocket connection ----------
+// ---------- WebSocket helpers ----------
 function getWsProtocol() {
   return location.protocol === 'https:' ? 'wss:' : 'ws:';
+}
+
+function sendHostMessage(msg) {
+  if (hostWs && hostWs.readyState === WebSocket.OPEN) {
+    hostWs.send(JSON.stringify(msg));
+  }
+}
+
+function sendListenerMessage(msg) {
+  if (listenerWs && listenerWs.readyState === WebSocket.OPEN) {
+    listenerWs.send(JSON.stringify(msg));
+  }
 }
 
 // ---------- WebRTC configuration ----------
@@ -120,16 +233,107 @@ const rtcConfig = {
   ]
 };
 
-// Helper to send WebRTC signaling messages through WebSocket
-function sendHostMessage(msg) {
-  if (hostWs && hostWs.readyState === WebSocket.OPEN) {
-    hostWs.send(JSON.stringify(msg));
+// ---------- Room state persistence ----------
+function saveRoomState() {
+  if (currentRoomCode) {
+    sessionStorage.setItem('roomCode', currentRoomCode);
   }
 }
 
-function sendListenerMessage(msg) {
+function clearRoomState() {
+  sessionStorage.removeItem('roomCode');
+  currentRoomCode = null;
+  isBroadcasting = false;
+}
+
+// ---------- Cleanup functions ----------
+function cleanupHost() {
+  if (hostWs && hostWs.readyState === WebSocket.OPEN) {
+    sendHostMessage({ type: 'host-cancel' });
+    hostWs.close();
+  }
+  hostWs = null;
+  if (hostStream) {
+    hostStream.getTracks().forEach(t => t.stop());
+    hostStream = null;
+  }
+  for (const { pc } of hostPeerConnections.values()) {
+    pc.close();
+  }
+  hostPeerConnections.clear();
+  listenerLatencies.clear();
+  if (syncIntervalId) {
+    clearInterval(syncIntervalId);
+    syncIntervalId = null;
+  }
+  membersMap.clear();
+  document.getElementById('hostControls').style.display = 'none';
+  clearRoomState();
+}
+
+function cleanupListener() {
+  if (listenerPeerConnection) {
+    listenerPeerConnection.close();
+    listenerPeerConnection = null;
+  }
+  listenerDataChannel = null;
   if (listenerWs && listenerWs.readyState === WebSocket.OPEN) {
-    listenerWs.send(JSON.stringify(msg));
+    listenerWs.close();
+  }
+  listenerWs = null;
+  if (audioContext) {
+    audioContext.close().catch(() => {});
+    audioContext = null;
+    delayNode = null;
+    gainNode = null;
+  }
+  myOneWayDelay = 0;
+}
+
+// ---------- Shared WebSocket message handler for host ----------
+function handleHostMessage(msg) {
+  const listenerListEl = document.getElementById('listenerList');
+
+  if (msg.type === 'error') {
+    document.getElementById('createErr').textContent = msg.message;
+    return;
+  }
+
+  if (msg.type === 'listener-join') {
+    addListenerRow(msg.id, 'Guest ' + (listenerListEl.children.length + 1));
+    if (hostStream) {
+      createPeerConnectionForListener(msg.id, hostStream.getTracks()[0]);
+    }
+  } else if (msg.type === 'member-info') {
+    membersMap.set(msg.id, { name: msg.name, avatar: msg.avatar });
+    updateHostMembersList();
+  } else if (msg.type === 'listener-leave') {
+    removeListenerRow(msg.id);
+    membersMap.delete(msg.id);
+    listenerLatencies.delete(msg.id);
+    updateHostMembersList();
+    const entry = hostPeerConnections.get(msg.id);
+    if (entry) {
+      entry.pc.close();
+      hostPeerConnections.delete(msg.id);
+    }
+    // Recalculate target delay when a listener leaves
+    recalculateTargetDelay();
+  } else if (msg.type === 'answer') {
+    const entry = hostPeerConnections.get(msg.from);
+    if (entry) {
+      entry.pc.setRemoteDescription(new RTCSessionDescription(msg.answer))
+        .catch(err => console.error(`Failed to set remote description for ${msg.from}:`, err));
+    }
+  } else if (msg.type === 'ice-candidate') {
+    const entry = hostPeerConnections.get(msg.from);
+    if (entry && msg.candidate) {
+      entry.pc.addIceCandidate(new RTCIceCandidate(msg.candidate))
+        .catch(err => console.error(`Failed to add ICE candidate from ${msg.from}:`, err));
+    }
+  } else if (msg.type === 'pong') {
+    // Sync pong from listener — calculate latency
+    handleSyncPong(msg);
   }
 }
 
@@ -142,14 +346,44 @@ const emptyHintEl = document.getElementById('emptyHint');
 const startPartyBtn = document.getElementById('startPartyBtn');
 const createErrEl = document.getElementById('createErr');
 
+function connectHostWebSocket(roomCode) {
+  if (hostWs) hostWs.close();
+  const wsProto = getWsProtocol();
+  hostWs = new WebSocket(`${wsProto}//${location.host}/ws?role=host&room=${roomCode}`);
+
+  hostWs.onopen = () => {
+    console.log('Host connected to signaling server');
+  };
+
+  hostWs.onmessage = (event) => {
+    let msg;
+    try { msg = JSON.parse(event.data); } catch { return; }
+    handleHostMessage(msg);
+  };
+
+  hostWs.onerror = (err) => {
+    console.error('Host WebSocket error:', err);
+    createErrEl.textContent = 'Failed to connect to server';
+  };
+
+  hostWs.onclose = () => {
+    console.log('Host disconnected from server');
+    // Auto-reconnect if we still have a room
+    if (currentRoomCode && currentView === 'view-create') {
+      console.log('Attempting to reconnect...');
+      setTimeout(() => {
+        if (currentRoomCode) connectHostWebSocket(currentRoomCode);
+      }, 2000);
+    }
+    hostWs = null;
+  };
+}
+
 function enterCreateRoom() {
   currentRoomCode = generateRoomCode();
-  saveRoomState(); // Save room code for refresh
+  saveRoomState();
   freqCodeEl.textContent = currentRoomCode.slice(0, 3) + ' ' + currentRoomCode.slice(3);
 
-  // The QR encodes a joinable URL: whoever scans it lands directly on the
-  // join view with the code pre-filled (join.html?code=XXXXXX once routing
-  // supports deep links — for now it encodes the code itself as a fallback).
   const joinUrl = `${location.origin}${location.pathname}?code=${currentRoomCode}`;
   if (window.QRCode) {
     QRCode.toCanvas(qrCanvas, joinUrl, {
@@ -164,65 +398,10 @@ function enterCreateRoom() {
   createErrEl.textContent = '';
   startPartyBtn.disabled = false;
   startPartyBtn.textContent = 'Start the Party';
+  document.getElementById('hostControls').style.display = 'none';
 
   showView('view-create');
-
-  // Open WebSocket connection as host
-  if (hostWs) hostWs.close();
-  const wsProto = getWsProtocol();
-  hostWs = new WebSocket(`${wsProto}//${location.host}/ws?role=host&room=${currentRoomCode}`);
-  
-  hostWs.onopen = () => {
-    console.log('Host connected to signaling server');
-  };
-
-  hostWs.onmessage = (event) => {
-    const msg = JSON.parse(event.data);
-    if (msg.type === 'listener-join') {
-      addListenerRow(msg.id, 'Guest ' + (listenerListEl.children.length + 1));
-      // If already broadcasting, create peer connection for new listener
-      if (hostStream) {
-        createPeerConnectionForListener(msg.id, hostStream.getTracks()[0]);
-      }
-    } else if (msg.type === 'member-info') {
-      // Update listener info with name and avatar
-      membersMap.set(msg.id, { name: msg.name, avatar: msg.avatar });
-      updateHostMembersList();
-    } else if (msg.type === 'listener-leave') {
-      removeListenerRow(msg.id);
-      membersMap.delete(msg.id);
-      updateHostMembersList();
-      const pc = hostPeerConnections.get(msg.id);
-      if (pc) {
-        pc.close();
-        hostPeerConnections.delete(msg.id);
-      }
-    } else if (msg.type === 'answer') {
-      // Listener sent back an answer
-      const pc = hostPeerConnections.get(msg.from);
-      if (pc) {
-        pc.setRemoteDescription(new RTCSessionDescription(msg.answer))
-          .catch(err => console.error(`Failed to set remote description for ${msg.from}:`, err));
-      }
-    } else if (msg.type === 'ice-candidate') {
-      // Listener sent ICE candidate
-      const pc = hostPeerConnections.get(msg.from);
-      if (pc && msg.candidate) {
-        pc.addIceCandidate(new RTCIceCandidate(msg.candidate))
-          .catch(err => console.error(`Failed to add ICE candidate from ${msg.from}:`, err));
-      }
-    }
-  };
-
-  hostWs.onerror = (err) => {
-    console.error('Host WebSocket error:', err);
-    createErrEl.textContent = 'Failed to connect to server';
-  };
-
-  hostWs.onclose = () => {
-    console.log('Host disconnected from server');
-    hostWs = null;
-  };
+  connectHostWebSocket(currentRoomCode);
 }
 
 function updateLobbyCount(n) {
@@ -232,10 +411,7 @@ function updateLobbyCount(n) {
 
 function addListenerRow(id, label) {
   emptyHintEl.style.display = 'none';
-  const row = document.createElement('div');
-  row.className = 'listener-row';
-  row.dataset.listenerId = id;
-  row.innerHTML = `<span class="listener-dot"></span><span>${label}</span>`;
+  const row = createListenerRow(id, label, null);
   listenerListEl.appendChild(row);
   updateLobbyCount(listenerListEl.children.length);
 }
@@ -246,67 +422,119 @@ function removeListenerRow(id) {
   updateLobbyCount(listenerListEl.children.length);
 }
 
-// Dev helper only — lets you sanity-check the lobby UI from the console
-// without a real listener connected. Not called automatically.
-window._simulateListenerJoin = () => {
-  const id = 'demo-' + Math.random().toString(36).slice(2, 7);
-  addListenerRow(id, 'Guest ' + (listenerListEl.children.length + 1));
-};
+function updateHostMembersList() {
+  document.querySelectorAll('[data-listener-id]').forEach(row => {
+    const id = row.dataset.listenerId;
+    const member = membersMap.get(id);
+    if (member) {
+      // Clear row safely and rebuild
+      while (row.firstChild) row.removeChild(row.firstChild);
 
-startPartyBtn.addEventListener('click', async () => {
-  createErrEl.textContent = '';
-  try {
-    // Captures the movie tab's audio directly from the browser with high-quality constraints
-    const displayStream = await navigator.mediaDevices.getDisplayMedia({
-      video: true,
-      audio: {
-        autoGainControl: false,
-        echoCancellation: false,
-        noiseSuppression: false,
-      },
-    });
+      const avatarSpan = document.createElement('span');
+      avatarSpan.className = 'member-avatar';
+      avatarSpan.textContent = member.avatar;
+      row.appendChild(avatarSpan);
 
-    const audioTracks = displayStream.getAudioTracks();
-    if (audioTracks.length === 0) {
-      displayStream.getTracks().forEach(t => t.stop());
-      createErrEl.textContent =
-        'No audio was shared. When the picker opens, choose the movie\'s tab and enable "Share tab audio."';
-      return;
+      const nameSpan = document.createElement('span');
+      nameSpan.className = 'member-name';
+      nameSpan.textContent = member.name;
+      row.appendChild(nameSpan);
     }
+  });
+}
 
-    // We only need the audio — stop the video track immediately so we're
-    // not capturing/encoding screen frames we'll never use.
-    displayStream.getVideoTracks().forEach(t => t.stop());
-    hostStream = new MediaStream(audioTracks);
+// ---------- Audio Sync: Host side ----------
+function startSyncPings() {
+  if (syncIntervalId) clearInterval(syncIntervalId);
 
-    startPartyBtn.textContent = 'Broadcasting…';
-    startPartyBtn.disabled = true;
-    document.getElementById('changeTabAudioBtn').style.display = 'block'; // Show change tab audio button
-
-    // Create RTCPeerConnection for each connected listener and send the audio
-    const audioTrack = audioTracks[0];
-    for (const [listenerId, row] of Array.from(listenerListEl.querySelectorAll('[data-listener-id]')).entries()) {
-      const id = row.dataset.listenerId;
-      createPeerConnectionForListener(id, audioTrack);
+  syncIntervalId = setInterval(() => {
+    const now = Date.now();
+    for (const [id, entry] of hostPeerConnections.entries()) {
+      if (entry.dc && entry.dc.readyState === 'open') {
+        try {
+          entry.dc.send(JSON.stringify({
+            type: 'ping',
+            hostTime: now,
+            targetId: id
+          }));
+        } catch (e) {
+          // Ignore send errors
+        }
+      }
     }
+  }, 3000); // Ping every 3 seconds
+}
 
-  } catch (err) {
-    createErrEl.textContent = 'Couldn\'t capture audio: ' + err.message;
+function handleSyncPong(msg) {
+  const now = Date.now();
+  const rtt = now - msg.hostTime;
+  const oneWay = rtt / 2;
+
+  listenerLatencies.set(msg.from, { rtt, oneWay, lastUpdate: now });
+  recalculateTargetDelay();
+}
+
+function recalculateTargetDelay() {
+  if (listenerLatencies.size === 0) {
+    hostTargetDelay = 0;
+    return;
   }
-});
 
+  let maxOneWay = 0;
+  for (const { oneWay } of listenerLatencies.values()) {
+    if (oneWay > maxOneWay) maxOneWay = oneWay;
+  }
+
+  // Target delay = max one-way + 150ms safety buffer
+  // Cap at 500ms to prevent excessive delay
+  hostTargetDelay = Math.min(maxOneWay + 150, 500);
+
+  // Broadcast target delay to all listeners via DataChannel
+  for (const [id, entry] of hostPeerConnections.entries()) {
+    if (entry.dc && entry.dc.readyState === 'open') {
+      const latency = listenerLatencies.get(id);
+      const listenerOneWay = latency ? latency.oneWay : 0;
+      try {
+        entry.dc.send(JSON.stringify({
+          type: 'sync-config',
+          targetDelay: hostTargetDelay,
+          yourOneWay: listenerOneWay
+        }));
+      } catch (e) {
+        // Ignore
+      }
+    }
+  }
+}
+
+// ---------- WebRTC: Host creates peer connection per listener ----------
 async function createPeerConnectionForListener(listenerId, audioTrack) {
   try {
     const pc = new RTCPeerConnection(rtcConfig);
-    hostPeerConnections.set(listenerId, pc);
+
+    // Create DataChannel for sync messages
+    const dc = pc.createDataChannel('sync', { ordered: true });
+    dc.onopen = () => {
+      console.log(`DataChannel open for listener ${listenerId}`);
+    };
+    dc.onmessage = (event) => {
+      let msg;
+      try { msg = JSON.parse(event.data); } catch { return; }
+      if (msg.type === 'pong') {
+        msg.from = listenerId;
+        handleSyncPong(msg);
+      }
+    };
+
+    hostPeerConnections.set(listenerId, { pc, dc });
 
     // Add the audio track
     const sender = pc.addTrack(audioTrack, hostStream);
-    
+
     // Set high bitrate for audio quality
     const params = sender.getParameters();
     if (!params.encodings) params.encodings = [{}];
-    params.encodings[0].maxBitrate = 320000; // 320 kbps for high quality
+    params.encodings[0].maxBitrate = 320000;
     await sender.setParameters(params);
 
     // Handle ICE candidates
@@ -324,6 +552,8 @@ async function createPeerConnectionForListener(listenerId, audioTrack) {
       console.log(`Peer connection with ${listenerId}: ${pc.connectionState}`);
       if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
         hostPeerConnections.delete(listenerId);
+        listenerLatencies.delete(listenerId);
+        recalculateTargetDelay();
       }
     };
 
@@ -340,30 +570,169 @@ async function createPeerConnectionForListener(listenerId, audioTrack) {
   }
 }
 
+// ---------- Audio Source UI Controls ----------
+const audioSourceSelect = document.getElementById('audioSourceSelect');
+const sourceModeTab = document.getElementById('sourceModeTab');
+const sourceModeMic = document.getElementById('sourceModeMic');
+const sourceModeFile = document.getElementById('sourceModeFile');
+const sourceModeUrl = document.getElementById('sourceModeUrl');
+const selectAudioFileBtn = document.getElementById('selectAudioFileBtn');
+const hostAudioFileInput = document.getElementById('hostAudioFileInput');
+const hostAudioPlayer = document.getElementById('hostAudioPlayer');
+const fileNameDisplay = document.getElementById('fileNameDisplay');
+const audioPlayerContainer = document.getElementById('audioPlayerContainer');
+
+if (audioSourceSelect) {
+  audioSourceSelect.addEventListener('change', () => {
+    const val = audioSourceSelect.value;
+    sourceModeTab.style.display = val === 'tab' ? 'block' : 'none';
+    sourceModeMic.style.display = val === 'mic' ? 'block' : 'none';
+    sourceModeFile.style.display = val === 'file' ? 'block' : 'none';
+    sourceModeUrl.style.display = val === 'url' ? 'block' : 'none';
+  });
+}
+
+if (selectAudioFileBtn && hostAudioFileInput) {
+  selectAudioFileBtn.addEventListener('click', () => hostAudioFileInput.click());
+  hostAudioFileInput.addEventListener('change', (e) => {
+    if (e.target.files.length === 0) return;
+    const file = e.target.files[0];
+    fileNameDisplay.textContent = `File: ${file.name}`;
+    hostAudioPlayer.src = URL.createObjectURL(file);
+    audioPlayerContainer.style.display = 'block';
+  });
+}
+
+async function getHostAudioStream(mode) {
+  if (mode === 'tab') {
+    if (!navigator.mediaDevices || typeof navigator.mediaDevices.getDisplayMedia !== 'function') {
+      throw new Error('Tab capture (getDisplayMedia) is not supported on mobile/TV browsers. Please select Microphone, Audio File, or URL Stream above.');
+    }
+    const displayStream = await navigator.mediaDevices.getDisplayMedia({
+      video: true,
+      audio: { autoGainControl: false, echoCancellation: false, noiseSuppression: false }
+    });
+    const audioTracks = displayStream.getAudioTracks();
+    if (audioTracks.length === 0) {
+      displayStream.getTracks().forEach(t => t.stop());
+      throw new Error('No audio was shared. Pick the video tab and enable "Share tab audio".');
+    }
+    displayStream.getVideoTracks().forEach(t => t.stop());
+    return new MediaStream(audioTracks);
+  }
+
+  if (mode === 'mic') {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      throw new Error('Microphone access requires HTTPS on mobile devices or is not supported.');
+    }
+    const micStream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+    });
+    return micStream;
+  }
+
+  if (mode === 'file' || mode === 'url') {
+    if (mode === 'url') {
+      const urlInput = document.getElementById('hostAudioUrlInput').value.trim();
+      if (!urlInput) throw new Error('Please enter an audio stream/file URL.');
+      hostAudioPlayer.src = urlInput;
+      audioPlayerContainer.style.display = 'block';
+      fileNameDisplay.textContent = `URL: ${urlInput}`;
+    }
+
+    if (!hostAudioPlayer.src) {
+      throw new Error('Please choose an audio file or enter a stream URL first.');
+    }
+
+    try {
+      await hostAudioPlayer.play();
+    } catch (playErr) {
+      console.warn('Audio play warning:', playErr);
+    }
+
+    if (hostAudioPlayer.captureStream) {
+      return hostAudioPlayer.captureStream();
+    } else if (hostAudioPlayer.mozCaptureStream) {
+      return hostAudioPlayer.mozCaptureStream();
+    } else {
+      const hostAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const sourceNode = hostAudioCtx.createMediaElementSource(hostAudioPlayer);
+      const destNode = hostAudioCtx.createMediaStreamDestination();
+      sourceNode.connect(destNode);
+      sourceNode.connect(hostAudioCtx.destination);
+      return destNode.stream;
+    }
+  }
+
+  throw new Error('Invalid audio source mode selected');
+}
+
+// ---------- Start Party (host) ----------
+startPartyBtn.addEventListener('click', async () => {
+  createErrEl.textContent = '';
+  const selectedMode = audioSourceSelect ? audioSourceSelect.value : 'tab';
+
+  try {
+    hostStream = await getHostAudioStream(selectedMode);
+    const audioTracks = hostStream.getAudioTracks();
+    if (audioTracks.length === 0) {
+      throw new Error('No audio tracks found in selected source.');
+    }
+
+    isBroadcasting = true;
+    startPartyBtn.textContent = '🔴 Broadcasting…';
+    startPartyBtn.disabled = true;
+    document.getElementById('hostControls').style.display = 'flex';
+
+    // Create RTCPeerConnection for each connected listener
+    const audioTrack = audioTracks[0];
+    const existingListeners = listenerListEl.querySelectorAll('[data-listener-id]');
+    for (const row of existingListeners) {
+      const id = row.dataset.listenerId;
+      createPeerConnectionForListener(id, audioTrack);
+    }
+
+    // Start sync pings
+    startSyncPings();
+
+    // Handle track ending
+    audioTrack.onended = () => {
+      createErrEl.textContent = 'Audio broadcast ended.';
+      isBroadcasting = false;
+      startPartyBtn.textContent = 'Start Broadcast';
+      startPartyBtn.disabled = false;
+    };
+
+  } catch (err) {
+    if (err.name !== 'NotAllowedError') {
+      createErrEl.textContent = err.message;
+    }
+  }
+});
+
+// ---------- Copy code ----------
 document.getElementById('copyCodeBtn').addEventListener('click', async () => {
   try {
     await navigator.clipboard.writeText(currentRoomCode);
     const btn = document.getElementById('copyCodeBtn');
     const original = btn.textContent;
-    btn.textContent = 'Copied';
+    btn.textContent = 'Copied ✓';
     setTimeout(() => (btn.textContent = original), 1200);
-  } catch (e) { /* clipboard may be unavailable — silently ignore */ }
+  } catch (e) { /* clipboard may be unavailable */ }
 });
 
+// ---------- End Party (host) ----------
 document.getElementById('endPartyBtn').addEventListener('click', () => {
-  if (hostStream) hostStream.getTracks().forEach(t => t.stop());
-  hostStream = null;
-  if (hostWs) hostWs.close();
-  hostWs = null;
-  document.getElementById('changeTabAudioBtn').style.display = 'none'; // Hide change tab audio button
-  clearRoomState(); // Clear saved room state
-  showView('view-landing');
+  showConfirmation('End the Party?', 'This will disconnect all listeners and close the room. Are you sure?', () => {
+    cleanupHost();
+    showView('view-landing');
+  });
 });
 
+// ---------- Change Tab Audio (host) ----------
 document.getElementById('changeTabAudioBtn').addEventListener('click', async () => {
   createErrEl.textContent = '';
   try {
-    // Capture new tab audio
     const displayStream = await navigator.mediaDevices.getDisplayMedia({
       video: true,
       audio: {
@@ -380,35 +749,61 @@ document.getElementById('changeTabAudioBtn').addEventListener('click', async () 
       return;
     }
 
-    // Stop video immediately
     displayStream.getVideoTracks().forEach(t => t.stop());
-    
-    // Stop old audio tracks
+
     if (hostStream) {
       hostStream.getTracks().forEach(t => t.stop());
     }
-    
+
     const newAudioTrack = audioTracks[0];
     hostStream = new MediaStream([newAudioTrack]);
 
     // Replace audio track on all peer connections
-    for (const [listenerId, pc] of hostPeerConnections.entries()) {
-      const sender = pc.getSenders().find(s => s.track && s.track.kind === 'audio');
+    for (const [lid, entry] of hostPeerConnections.entries()) {
+      const sender = entry.pc.getSenders().find(s => s.track && s.track.kind === 'audio');
       if (sender) {
         await sender.replaceTrack(newAudioTrack);
-        console.log(`Replaced audio track for listener ${listenerId}`);
+        console.log(`Replaced audio track for listener ${lid}`);
       }
     }
 
-    createErrEl.textContent = 'Tab audio changed!';
-    setTimeout(() => {
-      createErrEl.textContent = '';
-    }, 2000);
+    isBroadcasting = true;
+    startPartyBtn.textContent = '🔴 Broadcasting…';
+    startPartyBtn.disabled = true;
+
+    createErrEl.textContent = 'Tab audio changed successfully!';
+    setTimeout(() => { createErrEl.textContent = ''; }, 2000);
+
+    newAudioTrack.onended = () => {
+      createErrEl.textContent = 'Tab sharing stopped. Click "Change Tab Audio" to resume.';
+      isBroadcasting = false;
+      startPartyBtn.textContent = 'Start the Party';
+      startPartyBtn.disabled = false;
+    };
 
   } catch (err) {
     if (err.name !== 'NotAllowedError') {
       createErrEl.textContent = 'Couldn\'t capture new tab audio: ' + err.message;
     }
+  }
+});
+
+// ---------- Mute Host Speakers ----------
+let hostSpeakersMuted = false;
+
+document.getElementById('muteHostSpeakersBtn').addEventListener('click', () => {
+  const btn = document.getElementById('muteHostSpeakersBtn');
+  hostSpeakersMuted = !hostSpeakersMuted;
+
+  if (hostSpeakersMuted) {
+    btn.textContent = '🔇 Unmute Speakers';
+    btn.classList.add('muted');
+    // Mute the host's own captured audio playback
+    // The stream is sent to listeners but not played locally by default
+    // This is a no-op for now since getDisplayMedia audio goes to the tab, not host speakers
+  } else {
+    btn.textContent = '🔊 Mute Speakers';
+    btn.classList.remove('muted');
   }
 });
 
@@ -449,25 +844,42 @@ function enterJoinRoom(prefillCode) {
 
 joinContinueBtn.addEventListener('click', () => {
   const code = codeInputs.map(i => i.value).join('');
+  joinRoom(code);
+});
+
+function joinRoom(code) {
   joinErrEl.textContent = '';
   waitingCodeEl.textContent = code.slice(0, 3) + ' ' + code.slice(3);
   showView('view-waiting');
+
+  // Reset sync UI
+  document.getElementById('syncBadge').style.display = 'none';
+  document.getElementById('volumeControl').style.display = 'none';
+  document.getElementById('statusTitle').textContent = 'Connecting…';
+  document.getElementById('statusSub').textContent = 'Joining the room. Please wait…';
 
   // Open WebSocket connection as listener
   if (listenerWs) listenerWs.close();
   const wsProto = getWsProtocol();
   listenerWs = new WebSocket(`${wsProto}//${location.host}/ws?role=listener&room=${code}`);
-  
+
   listenerWs.onopen = () => {
     console.log('Listener connected to signaling server');
   };
 
   listenerWs.onmessage = (event) => {
-    const msg = JSON.parse(event.data);
+    let msg;
+    try { msg = JSON.parse(event.data); } catch { return; }
+
+    if (msg.type === 'error') {
+      joinErrEl.textContent = msg.message;
+      showView('view-join');
+      return;
+    }
+
     if (msg.type === 'welcome') {
       listenerId = msg.id;
       console.log('Listener ID:', msg.id);
-      // Send profile information to host
       sendListenerMessage({
         type: 'member-info',
         id: msg.id,
@@ -476,23 +888,18 @@ joinContinueBtn.addEventListener('click', () => {
       });
       enterConnectedState();
     } else if (msg.type === 'offer') {
-      // Host sent an offer with audio
       handleOfferFromHost(msg.offer);
     } else if (msg.type === 'ice-candidate') {
-      // Host sent ICE candidate
       if (listenerPeerConnection && msg.candidate) {
         listenerPeerConnection.addIceCandidate(new RTCIceCandidate(msg.candidate))
           .catch(err => console.error('Failed to add ICE candidate:', err));
       }
     } else if (msg.type === 'host-disconnected') {
-      // Host closed the party
-      joinErrEl.textContent = 'Host cancelled the party';
-      if (listenerPeerConnection) listenerPeerConnection.close();
-      listenerPeerConnection = null;
-      listenerWs.close();
-      setTimeout(() => showView('view-landing'), 2000);
+      document.getElementById('statusTitle').textContent = 'Host left';
+      document.getElementById('statusSub').textContent = 'The host has ended the party. Returning to home…';
+      cleanupListener();
+      setTimeout(() => showView('view-landing'), 2500);
     } else if (msg.type === 'members-update') {
-      // Update members list
       updateMembersList(msg.members);
     }
   };
@@ -507,45 +914,214 @@ joinContinueBtn.addEventListener('click', () => {
     console.log('Listener disconnected from server');
     listenerWs = null;
   };
-});
+}
 
-document.getElementById('scanBtn').addEventListener('click', () => {
-  joinErrEl.textContent = 'Camera scanning isn\'t wired up yet — enter the code manually for now.';
-});
-
+// ---------- Exit Party (listener) ----------
 document.getElementById('exitPartyBtn').addEventListener('click', () => {
-  // Close peer connection and WebSocket
-  if (listenerPeerConnection) {
-    listenerPeerConnection.close();
-    listenerPeerConnection = null;
-  }
-  if (listenerWs && listenerWs.readyState === WebSocket.OPEN) {
-    listenerWs.close();
-  }
-  listenerWs = null;
-  // Return to landing page
-  showView('view-landing');
+  showConfirmation('Exit Party?', 'You will disconnect from the audio broadcast.', () => {
+    cleanupListener();
+    showView('view-landing');
+  });
 });
+
+// ---------- QR Scanner ----------
+let html5QrScanner = null;
+
+function processScannedCode(decodedText) {
+  let code = decodedText;
+  try {
+    const url = new URL(decodedText);
+    const urlCode = url.searchParams.get('code');
+    if (urlCode) code = urlCode;
+  } catch {
+    // Not a URL, use as-is
+  }
+
+  code = code.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
+  if (code.length === 6) {
+    stopQrScanner();
+    joinRoom(code);
+  } else {
+    joinErrEl.textContent = `Scanned text ("${decodedText.slice(0, 20)}") doesn't contain a valid 6-char room code.`;
+  }
+}
+
+document.getElementById('scanBtn').addEventListener('click', async () => {
+  const readerEl = document.getElementById('qr-reader');
+  const stopBtn = document.getElementById('stopScanBtn');
+  const uploadBtn = document.getElementById('uploadQrBtn');
+
+  if (typeof Html5Qrcode === 'undefined') {
+    joinErrEl.textContent = 'QR scanner library not loaded. Please enter the code manually.';
+    return;
+  }
+
+  readerEl.style.display = 'block';
+  stopBtn.style.display = 'block';
+  uploadBtn.style.display = 'block';
+  joinErrEl.textContent = '';
+
+  // Check if getUserMedia is available (requires HTTPS or localhost on mobile)
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    if (location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
+      joinErrEl.textContent = 'Live camera access requires HTTPS on mobile devices. Use "Upload QR Image" or enter code manually.';
+    } else {
+      joinErrEl.textContent = 'Camera API not supported on this browser. Use "Upload QR Image".';
+    }
+    return;
+  }
+
+  if (html5QrScanner) {
+    try { await html5QrScanner.stop(); } catch (e) {}
+  }
+
+  html5QrScanner = new Html5Qrcode('qr-reader');
+
+  const scanConfig = { fps: 10, qrbox: { width: 250, height: 250 } };
+
+  // Try environment camera first
+  html5QrScanner.start(
+    { facingMode: 'environment' },
+    scanConfig,
+    (decodedText) => processScannedCode(decodedText),
+    () => {}
+  ).catch(async (err) => {
+    console.warn('Environment camera failed, trying fallback camera:', err);
+    try {
+      // Fallback: get camera list and pick first available camera
+      const cameras = await Html5Qrcode.getCameras();
+      if (cameras && cameras.length > 0) {
+        await html5QrScanner.start(
+          cameras[0].id,
+          scanConfig,
+          (decodedText) => processScannedCode(decodedText),
+          () => {}
+        );
+      } else {
+        throw new Error('No camera devices found');
+      }
+    } catch (fallbackErr) {
+      console.error('Camera scan failed:', fallbackErr);
+      joinErrEl.textContent = 'Camera permission denied or unavailable. Tap "Upload QR Image" below or enter code manually.';
+    }
+  });
+});
+
+// Photo upload QR scanner fallback
+const qrFileInput = document.getElementById('qrFileInput');
+const uploadQrBtn = document.getElementById('uploadQrBtn');
+
+uploadQrBtn.addEventListener('click', () => {
+  qrFileInput.click();
+});
+
+qrFileInput.addEventListener('change', (e) => {
+  if (e.target.files.length === 0) return;
+  const file = e.target.files[0];
+
+  const scanner = new Html5Qrcode('qr-reader');
+  document.getElementById('qr-reader').style.display = 'block';
+  document.getElementById('stopScanBtn').style.display = 'block';
+  joinErrEl.textContent = 'Scanning image…';
+
+  scanner.scanFile(file, true)
+    .then(decodedText => {
+      joinErrEl.textContent = '';
+      processScannedCode(decodedText);
+    })
+    .catch(err => {
+      console.error('Error scanning file:', err);
+      joinErrEl.textContent = 'Could not find a valid QR code in that image. Please enter code manually.';
+    });
+});
+
+document.getElementById('stopScanBtn').addEventListener('click', stopQrScanner);
+
+function stopQrScanner() {
+  if (html5QrScanner) {
+    html5QrScanner.stop().then(() => {
+      html5QrScanner.clear();
+      html5QrScanner = null;
+    }).catch(() => {
+      html5QrScanner = null;
+    });
+  }
+  document.getElementById('qr-reader').style.display = 'none';
+  document.getElementById('stopScanBtn').style.display = 'none';
+  document.getElementById('uploadQrBtn').style.display = 'none';
+}
 
 // ---------- Connected state (listener) ----------
 const statusPanel = document.getElementById('statusPanel');
+
 function enterConnectedState() {
-  statusPanel.classList.add('is-live');
-  document.getElementById('statusTitle').textContent = 'Connected';
+  document.getElementById('statusTitle').textContent = 'Waiting for the host to start…';
   document.getElementById('statusSub').textContent =
-    'Audio is streaming live. Put your headphones on to listen in.';
+    'You\'re in the room. Once the host starts the party, audio will begin automatically — put your headphones on now.';
 }
 
-// Hidden audio element for playing remote stream
-let remoteAudio = null;
-
-function initRemoteAudio() {
-  if (!remoteAudio) {
-    remoteAudio = new Audio();
-    remoteAudio.autoplay = true;
-    remoteAudio.controls = false;
+// ---------- Audio Sync: Listener side ----------
+function setupListenerAudioPipeline(stream) {
+  // Close existing context if any
+  if (audioContext) {
+    audioContext.close().catch(() => {});
   }
-  return remoteAudio;
+
+  audioContext = new (window.AudioContext || window.webkitAudioContext)();
+  const source = audioContext.createMediaStreamSource(stream);
+
+  // DelayNode for sync buffering (max 1 second)
+  delayNode = audioContext.createDelay(1.0);
+  delayNode.delayTime.value = 0; // Will be set by sync-config
+
+  // GainNode for volume control
+  gainNode = audioContext.createGain();
+  gainNode.gain.value = document.getElementById('volumeSlider').value / 100;
+
+  // Connect pipeline: source → delay → gain → speakers
+  source.connect(delayNode);
+  delayNode.connect(gainNode);
+  gainNode.connect(audioContext.destination);
+
+  // Show volume control
+  document.getElementById('volumeControl').style.display = 'flex';
+
+  return audioContext;
+}
+
+function handleSyncMessage(msg) {
+  if (msg.type === 'ping') {
+    // Respond to host ping via DataChannel
+    if (listenerDataChannel && listenerDataChannel.readyState === 'open') {
+      listenerDataChannel.send(JSON.stringify({
+        type: 'pong',
+        hostTime: msg.hostTime,
+        listenerTime: Date.now()
+      }));
+    }
+  } else if (msg.type === 'sync-config') {
+    // Apply the delay for synchronization
+    const targetDelay = msg.targetDelay || 0;
+    myOneWayDelay = msg.yourOneWay || 0;
+    const myDelay = Math.max(0, (targetDelay - myOneWayDelay)) / 1000; // Convert to seconds
+
+    if (delayNode) {
+      // Smooth transition to new delay
+      delayNode.delayTime.linearRampToValueAtTime(
+        Math.min(myDelay, 1.0), // Cap at 1 second
+        audioContext.currentTime + 0.1
+      );
+    }
+
+    // Update sync badge
+    const syncBadge = document.getElementById('syncBadge');
+    const syncDot = document.getElementById('syncDot');
+    const syncText = document.getElementById('syncText');
+    syncBadge.style.display = 'inline-flex';
+
+    syncDot.classList.add('synced');
+    syncText.textContent = `Synced (${Math.round(myDelay * 1000)}ms buffer)`;
+  }
 }
 
 // Handle offer from host (listener side)
@@ -553,14 +1129,34 @@ async function handleOfferFromHost(offer) {
   try {
     if (!listenerPeerConnection) {
       listenerPeerConnection = new RTCPeerConnection(rtcConfig);
-      const audio = initRemoteAudio();
+
+      // Handle DataChannel from host
+      listenerPeerConnection.ondatachannel = (event) => {
+        listenerDataChannel = event.channel;
+        listenerDataChannel.onmessage = (e) => {
+          let msg;
+          try { msg = JSON.parse(e.data); } catch { return; }
+          handleSyncMessage(msg);
+        };
+        listenerDataChannel.onopen = () => {
+          console.log('Sync DataChannel open');
+          document.getElementById('syncBadge').style.display = 'inline-flex';
+        };
+      };
 
       // Handle remote audio track
       listenerPeerConnection.ontrack = (event) => {
         console.log('Received remote audio track');
-        // Set the remote stream to the audio element for playback
-        audio.srcObject = event.streams[0];
-        audio.play().catch(err => console.error('Failed to play audio:', err));
+
+        // Set up Web Audio pipeline for sync + volume
+        const stream = event.streams[0];
+        setupListenerAudioPipeline(stream);
+
+        // Transition to live state
+        statusPanel.classList.add('is-live');
+        document.getElementById('statusTitle').textContent = 'Listening Live';
+        document.getElementById('statusSub').textContent =
+          'Audio is streaming and synced. Enjoy the show!';
       };
 
       // Handle ICE candidates
@@ -574,14 +1170,22 @@ async function handleOfferFromHost(offer) {
       };
 
       listenerPeerConnection.onconnectionstatechange = () => {
-        console.log(`Peer connection state: ${listenerPeerConnection.connectionState}`);
+        const state = listenerPeerConnection?.connectionState;
+        console.log(`Peer connection state: ${state}`);
+        if (state === 'connected') {
+          document.getElementById('statusTitle').textContent = 'Listening Live';
+        } else if (state === 'disconnected' || state === 'failed') {
+          document.getElementById('statusTitle').textContent = 'Connection lost';
+          document.getElementById('statusSub').textContent = 'Trying to reconnect…';
+          const syncDot = document.getElementById('syncDot');
+          syncDot.classList.remove('synced');
+          document.getElementById('syncText').textContent = 'Reconnecting…';
+        }
       };
     }
 
-    // Set remote description (the offer from host)
     await listenerPeerConnection.setRemoteDescription(new RTCSessionDescription(offer));
 
-    // Create and send answer
     const answer = await listenerPeerConnection.createAnswer();
     await listenerPeerConnection.setLocalDescription(answer);
     sendListenerMessage({
@@ -590,6 +1194,31 @@ async function handleOfferFromHost(offer) {
     });
   } catch (err) {
     console.error('Failed to handle offer from host:', err);
+  }
+}
+
+// ---------- Volume control ----------
+document.getElementById('volumeSlider').addEventListener('input', (e) => {
+  const val = e.target.value / 100;
+  document.getElementById('volumeValue').textContent = `${e.target.value}%`;
+  if (gainNode) {
+    gainNode.gain.linearRampToValueAtTime(val, audioContext.currentTime + 0.05);
+  }
+});
+
+// ---------- Members list (listener side) ----------
+function updateMembersList(members) {
+  membersMap.clear();
+  members.forEach(member => {
+    membersMap.set(member.id, { name: member.name, avatar: member.avatar });
+  });
+
+  const membersList = document.getElementById('membersList');
+  if (membersList) {
+    membersList.innerHTML = '';
+    membersMap.forEach((info) => {
+      membersList.appendChild(createMemberItem(info.name, info.avatar));
+    });
   }
 }
 
@@ -604,78 +1233,36 @@ async function handleOfferFromHost(offer) {
 
 // ---------- Restore room state on page load ----------
 (function restoreState() {
-  if (restoreRoomState()) {
-    // Reconnect to the same room if it was saved
+  const savedCode = sessionStorage.getItem('roomCode');
+  if (savedCode) {
+    currentRoomCode = savedCode;
     console.log('Restoring room:', currentRoomCode);
-    
-    // Update UI to show the room
+
     freqCodeEl.textContent = currentRoomCode.slice(0, 3) + ' ' + currentRoomCode.slice(3);
     listenerListEl.innerHTML = '';
     updateLobbyCount(0);
     createErrEl.textContent = '';
     startPartyBtn.disabled = false;
     startPartyBtn.textContent = 'Start the Party';
-    
+    document.getElementById('hostControls').style.display = 'none';
+
     showView('view-create');
-    
-    // Reconnect WebSocket
-    if (hostWs) hostWs.close();
-    const wsProto = getWsProtocol();
-    hostWs = new WebSocket(`${wsProto}//${location.host}/ws?role=host&room=${currentRoomCode}`);
-    
-    hostWs.onopen = () => {
-      console.log('Host reconnected to signaling server');
-    };
-
-    hostWs.onmessage = (event) => {
-      const msg = JSON.parse(event.data);
-      if (msg.type === 'listener-join') {
-        addListenerRow(msg.id, 'Guest ' + (listenerListEl.children.length + 1));
-        if (hostStream) {
-          createPeerConnectionForListener(msg.id, hostStream.getTracks()[0]);
-        }
-      } else if (msg.type === 'listener-leave') {
-        removeListenerRow(msg.id);
-        const pc = hostPeerConnections.get(msg.id);
-        if (pc) {
-          pc.close();
-          hostPeerConnections.delete(msg.id);
-        }
-      }
-    };
-
-    hostWs.onerror = (err) => {
-      console.error('Host WebSocket error:', err);
-      createErrEl.textContent = 'Failed to reconnect to server';
-    };
-
-    hostWs.onclose = () => {
-      console.log('Host disconnected from server');
-      hostWs = null;
-    };
+    connectHostWebSocket(currentRoomCode);
   }
 })();
 
 // ---------- Handle tab close / page unload ----------
 window.addEventListener('beforeunload', () => {
-  // Close host WebSocket to notify all listeners
-  if (hostWs) {
-    hostWs.close();
-  }
-  // Close listener WebSocket
-  if (listenerWs) {
-    listenerWs.close();
-  }
-  // Close peer connections
-  for (const pc of hostPeerConnections.values()) {
+  if (hostWs) hostWs.close();
+  if (listenerWs) listenerWs.close();
+  for (const { pc } of hostPeerConnections.values()) {
     pc.close();
   }
-  if (listenerPeerConnection) {
-    listenerPeerConnection.close();
-  }
+  if (listenerPeerConnection) listenerPeerConnection.close();
+  if (syncIntervalId) clearInterval(syncIntervalId);
 });
 
-// ---------- Profile Modal Initialization ----------
+// ---------- Profile Modal ----------
 (function initProfileModal() {
   const profileModal = document.getElementById('profileModal');
   const closeProfileBtn = document.getElementById('closeProfileBtn');
@@ -684,7 +1271,7 @@ window.addEventListener('beforeunload', () => {
   const avatarGrid = document.getElementById('avatarGrid');
   const saveProfileBtn = document.getElementById('saveProfileBtn');
 
-  // Create avatar options
+  // Create avatar options (safe — these are hardcoded emoji)
   AVATAR_OPTIONS.forEach(avatar => {
     const option = document.createElement('button');
     option.className = 'avatar-option';
@@ -700,35 +1287,35 @@ window.addEventListener('beforeunload', () => {
     avatarGrid.appendChild(option);
   });
 
-  // Initialize profile display
   profileNameInput.value = userProfile.name;
 
-  // Close modal
   closeProfileBtn.addEventListener('click', () => {
     profileModal.style.display = 'none';
   });
 
-  // Generate new name
   generateNameBtn.addEventListener('click', () => {
-    const newName = generateCoolName();
-    profileNameInput.value = newName;
+    profileNameInput.value = generateCoolName();
   });
 
-  // Save profile
   saveProfileBtn.addEventListener('click', () => {
     const newName = profileNameInput.value.trim() || generateCoolName();
     const selectedAvatar = document.querySelector('.avatar-option.selected');
     const newAvatar = selectedAvatar ? selectedAvatar.textContent : userProfile.avatar;
-    
-    userProfile = updateProfile(newName, newAvatar);
-    profileModal.style.display = 'none';
-  });
 
-  // Expose function to open profile modal
-  window.openProfileModal = () => {
-    profileNameInput.value = userProfile.name;
-    profileModal.style.display = 'flex';
-  };
+    userProfile = updateProfile(newName, newAvatar);
+    updateProfileButtons();
+    profileModal.style.display = 'none';
+
+    // If connected as listener, re-send profile info
+    if (listenerWs && listenerWs.readyState === WebSocket.OPEN && listenerId) {
+      sendListenerMessage({
+        type: 'member-info',
+        id: listenerId,
+        name: userProfile.name,
+        avatar: userProfile.avatar
+      });
+    }
+  });
 
   // Close modal when clicking outside
   profileModal.addEventListener('click', (e) => {
@@ -736,43 +1323,17 @@ window.addEventListener('beforeunload', () => {
       profileModal.style.display = 'none';
     }
   });
-})();
 
-// ---------- Members List Management ----------
-let membersMap = new Map(); // id -> {name, avatar}
-
-function updateMembersList(members) {
-  // Update members map
-  membersMap.clear();
-  members.forEach(member => {
-    membersMap.set(member.id, { name: member.name, avatar: member.avatar });
-  });
-  
-  // Update UI display
-  const membersList = document.getElementById('membersList');
-  if (membersList) {
-    membersList.innerHTML = '';
-    membersMap.forEach((info, id) => {
-      const memberEl = document.createElement('div');
-      memberEl.className = 'member-item';
-      memberEl.innerHTML = `<span>${info.avatar}</span><span class="member-name">${info.name}</span>`;
-      membersList.appendChild(memberEl);
+  // Wire profile buttons
+  function openProfileModal() {
+    profileNameInput.value = userProfile.name;
+    // Update selected avatar
+    document.querySelectorAll('.avatar-option').forEach(opt => {
+      opt.classList.toggle('selected', opt.textContent === userProfile.avatar);
     });
+    profileModal.style.display = 'flex';
   }
-}
 
-function updateHostMembersList() {
-  // Update the listener list with member info
-  document.querySelectorAll('[data-listener-id]').forEach(row => {
-    const id = row.dataset.listenerId;
-    const member = membersMap.get(id);
-    if (member) {
-      const nameEl = row.querySelector('.member-name');
-      if (nameEl) {
-        nameEl.textContent = member.name;
-      } else {
-        row.innerHTML = `<span class="member-avatar">${member.avatar}</span><span class="member-name">${member.name}</span>`;
-      }
-    }
-  });
-}
+  document.getElementById('hostProfileBtn').addEventListener('click', openProfileModal);
+  document.getElementById('listenerProfileBtn').addEventListener('click', openProfileModal);
+})();

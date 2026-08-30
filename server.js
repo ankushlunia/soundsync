@@ -22,9 +22,11 @@ server.on('upgrade', (request, socket, head) => {
   }
 });
 
-let hostSocket = null;
-const listeners = new Map(); // id -> ws
-const memberInfo = new Map(); // id -> {name, avatar}
+// ---------- Multi-room state ----------
+// rooms: Map<roomCode, { host: ws, listeners: Map<id, ws>, memberInfo: Map<id, {name, avatar}>, createdAt: number }>
+const rooms = new Map();
+
+const ROOM_EXPIRY_MS = 4 * 60 * 60 * 1000; // 4 hours
 
 function send(ws, obj) {
   if (ws && ws.readyState === WebSocket.OPEN) {
@@ -32,118 +34,194 @@ function send(ws, obj) {
   }
 }
 
-function broadcastStatus() {
-  const status = { type: 'status', hostConnected: !!hostSocket, listenerCount: listeners.size };
-  send(hostSocket, status);
-  for (const ws of listeners.values()) send(ws, status);
+function getRoom(roomCode) {
+  return rooms.get(roomCode);
 }
 
-function broadcastMembersList() {
-  // Send current members list to all connected users
-  const members = Array.from(memberInfo.entries()).map(([id, info]) => ({
+function createRoom(roomCode, hostWs) {
+  const room = {
+    host: hostWs,
+    listeners: new Map(),
+    memberInfo: new Map(),
+    createdAt: Date.now(),
+  };
+  rooms.set(roomCode, room);
+  return room;
+}
+
+function destroyRoom(roomCode) {
+  const room = rooms.get(roomCode);
+  if (room) {
+    // Notify all listeners
+    for (const listenerWs of room.listeners.values()) {
+      send(listenerWs, { type: 'host-disconnected' });
+    }
+    room.listeners.clear();
+    room.memberInfo.clear();
+    rooms.delete(roomCode);
+    console.log(`Room ${roomCode} destroyed. Active rooms: ${rooms.size}`);
+  }
+}
+
+function broadcastStatus(room) {
+  const status = { type: 'status', hostConnected: !!room.host, listenerCount: room.listeners.size };
+  send(room.host, status);
+  for (const ws of room.listeners.values()) send(ws, status);
+}
+
+function broadcastMembersList(room) {
+  const members = Array.from(room.memberInfo.entries()).map(([id, info]) => ({
     id,
     name: info.name,
     avatar: info.avatar
   }));
-  
-  send(hostSocket, { type: 'members-update', members });
-  for (const ws of listeners.values()) {
+
+  send(room.host, { type: 'members-update', members });
+  for (const ws of room.listeners.values()) {
     send(ws, { type: 'members-update', members });
   }
 }
 
+// ---------- Room expiry cleanup (every 30 minutes) ----------
+setInterval(() => {
+  const now = Date.now();
+  for (const [code, room] of rooms.entries()) {
+    if (now - room.createdAt > ROOM_EXPIRY_MS) {
+      console.log(`Room ${code} expired after 4 hours.`);
+      destroyRoom(code);
+    }
+  }
+}, 30 * 60 * 1000);
+
+// ---------- WebSocket connection handling ----------
 wss.on('connection', (ws, req) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const role = url.searchParams.get('role');
+  const roomCode = url.searchParams.get('room');
+
+  if (!roomCode || roomCode.length < 4) {
+    send(ws, { type: 'error', message: 'Invalid room code' });
+    ws.close();
+    return;
+  }
 
   if (role === 'host') {
-    hostSocket = ws;
-    console.log('Host connected.');
-    for (const id of listeners.keys()) {
-      send(hostSocket, { type: 'listener-join', id });
+    // If room already exists with an active host, reject
+    const existing = getRoom(roomCode);
+    if (existing && existing.host && existing.host.readyState === WebSocket.OPEN) {
+      send(ws, { type: 'error', message: 'Room already has a host' });
+      ws.close();
+      return;
     }
-    broadcastStatus();
+
+    // Create or reclaim room
+    const room = existing || createRoom(roomCode, ws);
+    room.host = ws;
+    if (!existing) rooms.set(roomCode, room);
+    console.log(`Host connected to room ${roomCode}. Active rooms: ${rooms.size}`);
+
+    // Inform host of existing listeners
+    for (const id of room.listeners.keys()) {
+      send(ws, { type: 'listener-join', id });
+    }
+    // Send existing member info
+    for (const [id, info] of room.memberInfo.entries()) {
+      send(ws, { type: 'member-info', id, name: info.name, avatar: info.avatar });
+    }
+    broadcastStatus(room);
 
     ws.on('message', (data) => {
       let msg;
       try { msg = JSON.parse(data); } catch { return; }
-      
+
       // Host cancel party
       if (msg.type === 'host-cancel') {
-        for (const listenerWs of listeners.values()) {
-          send(listenerWs, { type: 'host-disconnected' });
-        }
-        listeners.clear();
+        destroyRoom(roomCode);
         return;
       }
-      
+
       // WebRTC signaling: forward to specific listener
       if (msg.type === 'offer' || msg.type === 'ice-candidate') {
-        const target = listeners.get(msg.id);
+        const target = room.listeners.get(msg.id);
         if (target) {
-          // Add sender info for listener
           msg.from = 'host';
           send(target, msg);
         }
       } else {
-        // Other messages
-        const target = listeners.get(msg.id);
-        if (target) send(target, msg);
+        // Other messages (including sync messages) — forward to specific listener
+        if (msg.id) {
+          const target = room.listeners.get(msg.id);
+          if (target) send(target, msg);
+        } else if (msg.type === 'sync-config') {
+          // Broadcast sync config to all listeners
+          for (const listenerWs of room.listeners.values()) {
+            send(listenerWs, msg);
+          }
+        }
       }
     });
 
     ws.on('close', () => {
-      console.log('Host disconnected.');
-      if (hostSocket === ws) {
-        // Notify all listeners that host has disconnected
-        for (const listenerWs of listeners.values()) {
-          send(listenerWs, { type: 'host-disconnected' });
-        }
-        hostSocket = null;
-        listeners.clear(); // Clear all listeners when host disconnects
-        memberInfo.clear(); // Clear member info
+      console.log(`Host disconnected from room ${roomCode}.`);
+      const r = getRoom(roomCode);
+      if (r && r.host === ws) {
+        destroyRoom(roomCode);
       }
-      broadcastStatus();
     });
 
   } else {
-    const id = crypto.randomUUID();
-    listeners.set(id, ws);
-    send(ws, { type: 'welcome', id });
-    console.log(`Listener ${id} connected. Total: ${listeners.size}`);
+    // Listener joining
+    const room = getRoom(roomCode);
+    if (!room) {
+      send(ws, { type: 'error', message: 'Room not found. Check the code and try again.' });
+      ws.close();
+      return;
+    }
 
-    if (hostSocket) send(hostSocket, { type: 'listener-join', id });
-    broadcastStatus();
+    const id = crypto.randomUUID();
+    room.listeners.set(id, ws);
+    send(ws, { type: 'welcome', id, roomCode });
+    console.log(`Listener ${id} joined room ${roomCode}. Listeners: ${room.listeners.size}`);
+
+    if (room.host) send(room.host, { type: 'listener-join', id });
+    broadcastStatus(room);
 
     ws.on('message', (data) => {
       let msg;
       try { msg = JSON.parse(data); } catch { return; }
-      
+
+      const currentRoom = getRoom(roomCode);
+      if (!currentRoom) return;
+
       // WebRTC signaling: forward to host with sender ID
       if (msg.type === 'answer' || msg.type === 'ice-candidate') {
         msg.from = id;
-        send(hostSocket, msg);
+        send(currentRoom.host, msg);
       } else if (msg.type === 'member-info') {
         // Store member info and broadcast to all
-        memberInfo.set(id, { name: msg.name, avatar: msg.avatar });
-        // Broadcast to host
-        if (hostSocket) send(hostSocket, { type: 'member-info', id, name: msg.name, avatar: msg.avatar });
-        // Broadcast to all listeners
-        broadcastMembersList();
+        currentRoom.memberInfo.set(id, { name: msg.name, avatar: msg.avatar });
+        if (currentRoom.host) send(currentRoom.host, { type: 'member-info', id, name: msg.name, avatar: msg.avatar });
+        broadcastMembersList(currentRoom);
+      } else if (msg.type === 'pong') {
+        // Sync pong — forward to host with sender ID
+        msg.from = id;
+        send(currentRoom.host, msg);
       } else {
         // Other messages
         msg.id = id;
-        send(hostSocket, msg);
+        send(currentRoom.host, msg);
       }
     });
 
     ws.on('close', () => {
-      listeners.delete(id);
-      memberInfo.delete(id);
-      console.log(`Listener ${id} disconnected. Total: ${listeners.size}`);
-      if (hostSocket) send(hostSocket, { type: 'listener-leave', id });
-      broadcastMembersList();
-      broadcastStatus();
+      const currentRoom = getRoom(roomCode);
+      if (!currentRoom) return;
+      currentRoom.listeners.delete(id);
+      currentRoom.memberInfo.delete(id);
+      console.log(`Listener ${id} left room ${roomCode}. Listeners: ${currentRoom.listeners.size}`);
+      if (currentRoom.host) send(currentRoom.host, { type: 'listener-leave', id });
+      broadcastMembersList(currentRoom);
+      broadcastStatus(currentRoom);
     });
   }
 
@@ -166,10 +244,10 @@ server.listen(PORT, () => {
   const ips = getLocalIPs();
   console.log(`\nSoundSync running on port ${PORT}\n`);
   console.log('On the HOST device, open:');
-  console.log(`  http://localhost:${PORT}/host.html`);
+  console.log(`  http://localhost:${PORT}`);
   if (ips.length) {
     console.log('\nOn LISTENER phones (same WiFi), open one of:');
-    ips.forEach((ip) => console.log(`  http://${ip}:${PORT}/client.html`));
+    ips.forEach((ip) => console.log(`  http://${ip}:${PORT}`));
   } else {
     console.log('\nCould not detect a local network IP. Run `ipconfig` / `ifconfig` to find it manually.');
   }
