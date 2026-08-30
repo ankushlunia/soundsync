@@ -1,0 +1,14 @@
+{
+  "name": "silent-broadcast",
+  "version": "1.0.0",
+  "description": "Broadcast host audio (e.g. a movie) over local WiFi to multiple phones for private headphone listening.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "qrcode": "^1.5.4",
+    "ws": "^8.18.0"
+  }
+}

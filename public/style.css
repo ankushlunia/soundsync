@@ -1,0 +1,506 @@
+/* ==========================================================================
+   Silent Broadcast — Design Tokens
+   Theme: a late-night private radio signal. Warm amber = broadcasting out.
+   Cool cyan = receiving. A slow tuning-dial sweep is the one signature motif.
+   ========================================================================== */
+
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@500;600&display=swap');
+
+:root {
+  --bg-void: #12141b;
+  --bg-void-2: #0d0f15;
+  --bg-panel: #191c25;
+  --bg-panel-raised: #21252f;
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.16);
+
+  --text-primary: #f3efe7;
+  --text-secondary: #a1a6b5;
+  --text-muted: #666b79;
+
+  --amber: #f0a860;
+  --amber-dim: rgba(240, 168, 96, 0.14);
+  --amber-line: rgba(240, 168, 96, 0.35);
+
+  --cyan: #5fcdd2;
+  --cyan-dim: rgba(95, 205, 210, 0.14);
+  --cyan-line: rgba(95, 205, 210, 0.35);
+
+  --danger: #e2695f;
+
+  --font-display: 'Space Grotesk', sans-serif;
+  --font-body: 'Inter', sans-serif;
+  --font-mono: 'IBM Plex Mono', monospace;
+
+  --radius-lg: 20px;
+  --radius-md: 14px;
+  --radius-sm: 8px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+body {
+  background:
+    radial-gradient(ellipse 900px 500px at 50% -10%, rgba(240, 168, 96, 0.07), transparent 60%),
+    var(--bg-void);
+  color: var(--text-primary);
+  font-family: var(--font-body);
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+}
+
+.app-shell {
+  max-width: 480px;
+  margin: 0 auto;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  padding: 0 20px 40px;
+}
+
+/* ---------- Signature: tuning dial sweep ---------- */
+.dial {
+  position: relative;
+  height: 46px;
+  margin: 22px 0 8px;
+  overflow: hidden;
+}
+.dial::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: repeating-linear-gradient(
+    90deg,
+    var(--border-strong) 0, var(--border-strong) 1px,
+    transparent 1px, transparent 14px
+  );
+  opacity: 0.5;
+}
+.dial__needle {
+  position: absolute;
+  top: 8px;
+  width: 2px;
+  height: 30px;
+  background: linear-gradient(var(--amber), transparent);
+  border-radius: 2px;
+  box-shadow: 0 0 10px var(--amber);
+  animation: sweep 7s ease-in-out infinite;
+}
+@keyframes sweep {
+  0%, 100% { left: 8%; }
+  50% { left: 88%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dial__needle { animation: none; left: 50%; }
+}
+
+/* ---------- Header ---------- */
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  color: var(--amber);
+  text-transform: uppercase;
+  margin: 0 0 6px;
+}
+.wordmark {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 34px;
+  letter-spacing: -0.01em;
+  margin: 0 0 6px;
+  line-height: 1.1;
+}
+.tagline {
+  color: var(--text-secondary);
+  font-size: 14.5px;
+  line-height: 1.5;
+  margin: 0 0 32px;
+  max-width: 38ch;
+}
+
+/* ---------- Views ---------- */
+.view { display: none; flex: 1; flex-direction: column; }
+.view.active { display: flex; }
+#view-landing.active { justify-content: center; padding-bottom: 10vh; }
+
+/* ---------- Landing: two role cards ---------- */
+.role-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 4px;
+}
+.role-card {
+  position: relative;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-panel);
+  padding: 24px 22px;
+  text-align: left;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  transition: border-color 0.18s ease, transform 0.12s ease, background 0.18s ease;
+  font-family: inherit;
+  color: inherit;
+}
+.role-card:active { transform: scale(0.985); }
+.role-card:hover { background: var(--bg-panel-raised); }
+.role-card:focus-visible { outline: 2px solid var(--amber); outline-offset: 3px; }
+
+.role-card--host:hover, .role-card--host:focus-visible { border-color: var(--amber-line); }
+.role-card--join:hover, .role-card--join:focus-visible { border-color: var(--cyan-line); }
+
+.role-icon {
+  flex: none;
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.role-card--host .role-icon { background: var(--amber-dim); color: var(--amber); }
+.role-card--join .role-icon { background: var(--cyan-dim); color: var(--cyan); }
+.role-icon svg { width: 22px; height: 22px; }
+
+.role-copy h2 {
+  font-family: var(--font-display);
+  font-size: 17px;
+  font-weight: 600;
+  margin: 0 0 3px;
+}
+.role-copy p {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin: 0;
+  line-height: 1.4;
+}
+
+.footnote {
+  margin-top: 40px;
+  padding-top: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.6;
+  text-align: center;
+}
+
+/* ---------- Shared: back button + step header ---------- */
+.step-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+.back-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex: none;
+}
+.back-btn:hover { color: var(--text-primary); border-color: var(--border-strong); }
+.step-title {
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+/* ---------- Create Room ---------- */
+.freq-panel {
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-panel);
+  border-radius: var(--radius-lg);
+  padding: 28px 24px;
+  text-align: center;
+  margin-bottom: 18px;
+}
+.freq-label {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.16em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  margin-bottom: 12px;
+}
+.freq-code {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-size: 40px;
+  letter-spacing: 0.14em;
+  color: var(--amber);
+  text-shadow: 0 0 24px var(--amber-dim);
+  margin: 0 0 18px;
+  word-break: break-all;
+}
+#qrCanvas {
+  border-radius: var(--radius-md);
+  background: #fff;
+  padding: 10px;
+  margin: 0 auto;
+  display: block;
+}
+.copy-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 18px;
+}
+.copy-row button {
+  flex: 1;
+}
+
+.lobby-panel {
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-panel);
+  border-radius: var(--radius-lg);
+  padding: 18px 20px;
+  margin-bottom: 20px;
+}
+.lobby-panel__title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-bottom: 12px;
+}
+.lobby-count {
+  font-family: var(--font-mono);
+  color: var(--cyan);
+  font-weight: 600;
+}
+.listener-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 42px;
+}
+.listener-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13.5px;
+  color: var(--text-primary);
+  padding: 8px 10px;
+  background: var(--bg-panel-raised);
+  border-radius: var(--radius-sm);
+  animation: rowIn 0.25s ease;
+}
+@keyframes rowIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.listener-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--cyan);
+  box-shadow: 0 0 6px var(--cyan);
+  flex: none;
+}
+.empty-hint {
+  font-size: 13px;
+  color: var(--text-muted);
+  padding: 10px 2px;
+}
+
+/* ---------- Join Room ---------- */
+.code-entry {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  margin: 6px 0 22px;
+}
+.code-entry input {
+  width: 42px;
+  height: 54px;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--text-primary);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  outline: none;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.code-entry input:focus {
+  border-color: var(--cyan-line);
+  background: var(--bg-panel-raised);
+}
+
+.divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--text-muted);
+  font-size: 12px;
+  margin: 22px 0;
+}
+.divider::before, .divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border-subtle);
+}
+
+.scan-btn {
+  width: 100%;
+  border: 1px dashed var(--border-strong);
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: var(--radius-md);
+  padding: 16px;
+  font-family: inherit;
+  font-size: 13.5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  cursor: pointer;
+}
+.scan-btn:hover { color: var(--text-primary); border-color: var(--text-secondary); }
+
+/* ---------- Waiting / Connected states ---------- */
+.status-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 20px;
+  padding: 40px 0;
+}
+.pulse-ring {
+  position: relative;
+  width: 96px;
+  height: 96px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.pulse-ring::before, .pulse-ring::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 1.5px solid var(--cyan-line);
+  animation: pulseRing 2.4s ease-out infinite;
+}
+.pulse-ring::after { animation-delay: 1.2s; }
+@keyframes pulseRing {
+  0% { transform: scale(0.6); opacity: 0.9; }
+  100% { transform: scale(1.6); opacity: 0; }
+}
+.pulse-ring__core {
+  width: 44px; height: 44px;
+  border-radius: 50%;
+  background: var(--cyan-dim);
+  color: var(--cyan);
+  display: flex; align-items: center; justify-content: center;
+}
+.pulse-ring__core svg { width: 20px; height: 20px; }
+
+.status-panel.is-live .pulse-ring::before,
+.status-panel.is-live .pulse-ring::after { border-color: var(--amber-line); }
+.status-panel.is-live .pulse-ring__core { background: var(--amber-dim); color: var(--amber); }
+
+.status-title {
+  font-family: var(--font-display);
+  font-size: 19px;
+  font-weight: 600;
+  margin: 0;
+}
+.status-sub {
+  font-size: 13.5px;
+  color: var(--text-secondary);
+  max-width: 30ch;
+  line-height: 1.5;
+  margin: 0;
+}
+.status-code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  color: var(--text-muted);
+}
+
+/* ---------- Buttons ---------- */
+.btn {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 14.5px;
+  border-radius: var(--radius-md);
+  padding: 15px 20px;
+  border: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: transform 0.1s ease, opacity 0.15s ease;
+}
+.btn:active { transform: scale(0.98); }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.btn-primary {
+  background: var(--amber);
+  color: #1a1108;
+  width: 100%;
+}
+.btn-secondary {
+  background: var(--bg-panel-raised);
+  color: var(--text-primary);
+  border: 1px solid var(--border-subtle);
+}
+.btn-ghost {
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-subtle);
+}
+.btn-danger {
+  background: transparent;
+  color: var(--danger);
+  border: 1px solid rgba(226, 105, 95, 0.3);
+}
+
+.mic-note {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 14px 16px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin-top: 6px;
+}
+.mic-note svg { flex: none; width: 16px; height: 16px; margin-top: 1px; color: var(--amber); }
+
+.err-text {
+  color: var(--danger);
+  font-size: 12.5px;
+  margin-top: 10px;
+  min-height: 16px;
+}

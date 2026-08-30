@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Silent Broadcast</title>
+<link rel="stylesheet" href="style.css">
+<script src="vendor/qrcode.min.js"></script>
+</head>
+<body>
+<div class="app-shell">
+
+  <!-- ============ LANDING ============ -->
+  <section id="view-landing" class="view active">
+    <div class="dial"><div class="dial__needle"></div></div>
+    <p class="eyebrow">Private · Local Wi-Fi · No App Needed</p>
+    <h1 class="wordmark">Silent Broadcast</h1>
+    <p class="tagline">Watch or listen together in the same room — everyone hears it through their own headphones, no sound in the air.</p>
+
+    <div class="role-grid">
+      <button class="role-card role-card--host" id="createRoomBtn">
+        <span class="role-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2v6"/><path d="M8.5 5.5a5 5 0 0 0 0 7"/><path d="M15.5 5.5a5 5 0 0 1 0 7"/>
+            <path d="M5.5 2.5a9 9 0 0 0 0 13"/><path d="M18.5 2.5a9 9 0 0 1 0 13"/>
+            <circle cx="12" cy="14" r="2.2"/><path d="M9 20h6"/><path d="M12 16.2V20"/>
+          </svg>
+        </span>
+        <span class="role-copy">
+          <h2>Create a Room</h2>
+          <p>Broadcast your device's audio to everyone who joins</p>
+        </span>
+      </button>
+
+      <button class="role-card role-card--join" id="joinRoomBtn">
+        <span class="role-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 13a8 8 0 0 1 16 0"/><path d="M4 13v5a2 2 0 0 0 2 2h1v-7H5a1 1 0 0 0-1 1z"/>
+            <path d="M20 13v5a2 2 0 0 1-2 2h-1v-7h2a1 1 0 0 1 1 1z"/>
+          </svg>
+        </span>
+        <span class="role-copy">
+          <h2>Join a Room</h2>
+          <p>Enter a code or scan a QR to start listening</p>
+        </span>
+      </button>
+    </div>
+
+    <p class="footnote">Everyone needs to be on the same Wi-Fi network.<br>Audio never leaves your local network.</p>
+  </section>
+
+  <!-- ============ CREATE ROOM (host) ============ -->
+  <section id="view-create" class="view">
+    <div class="step-header">
+      <button class="back-btn" data-nav="view-landing" aria-label="Back">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+      </button>
+      <span class="step-title">Room Created</span>
+    </div>
+
+    <div class="freq-panel">
+      <p class="freq-label">Room Code</p>
+      <p class="freq-code" id="freqCode">— — — — — —</p>
+      <canvas id="qrCanvas"></canvas>
+      <div class="copy-row">
+        <button class="btn btn-secondary" id="copyCodeBtn">Copy Code</button>
+      </div>
+    </div>
+
+    <div class="lobby-panel">
+      <div class="lobby-panel__title">
+        <span>In the room</span>
+        <span class="lobby-count" id="lobbyCount">0</span>
+      </div>
+      <div class="listener-list" id="listenerList"></div>
+      <p class="empty-hint" id="emptyHint">Waiting for people to join — share the code or QR above.</p>
+    </div>
+
+    <button class="btn btn-primary" id="startPartyBtn">Start the Party</button>
+    <div class="mic-note">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2v20M2 12h20"/></svg>
+      <span>When you tap Start, your browser will ask you to pick the movie's tab and share its audio. Make sure "Share tab audio" is checked.</span>
+    </div>
+    <p class="err-text" id="createErr"></p>
+
+    <button class="btn btn-danger" id="endPartyBtn" style="margin-top:14px;">End Room</button>
+  </section>
+
+  <!-- ============ JOIN ROOM ============ -->
+  <section id="view-join" class="view">
+    <div class="step-header">
+      <button class="back-btn" data-nav="view-landing" aria-label="Back">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+      </button>
+      <span class="step-title">Join a Room</span>
+    </div>
+
+    <p class="tagline" style="margin-bottom:16px;">Enter the 6-character code shown on the host's screen.</p>
+
+    <div class="code-entry">
+      <input maxlength="1" inputmode="text" autocapitalize="characters">
+      <input maxlength="1" inputmode="text" autocapitalize="characters">
+      <input maxlength="1" inputmode="text" autocapitalize="characters">
+      <input maxlength="1" inputmode="text" autocapitalize="characters">
+      <input maxlength="1" inputmode="text" autocapitalize="characters">
+      <input maxlength="1" inputmode="text" autocapitalize="characters">
+    </div>
+
+    <button class="btn btn-primary" id="joinContinueBtn" disabled>Join Room</button>
+    <p class="err-text" id="joinErr"></p>
+
+    <div class="divider">or</div>
+
+    <button class="scan-btn" id="scanBtn">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3zM19 14h2v2h-2zM14 19h2v2h-2zM19 19h2v2h-2z"/></svg>
+      Scan QR Code
+    </button>
+  </section>
+
+  <!-- ============ WAITING / CONNECTED (listener) ============ -->
+  <section id="view-waiting" class="view">
+    <div class="step-header">
+      <button class="back-btn" data-nav="view-landing" aria-label="Back">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+      </button>
+      <span class="step-title">Room <span id="waitingCode"></span></span>
+    </div>
+
+    <div class="status-panel" id="statusPanel">
+      <div class="pulse-ring">
+        <span class="pulse-ring__core">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 13a8 8 0 0 1 16 0"/><path d="M4 13v5a2 2 0 0 0 2 2h1v-7H5a1 1 0 0 0-1 1z"/>
+            <path d="M20 13v5a2 2 0 0 1-2 2h-1v-7h2a1 1 0 0 1 1 1z"/>
+          </svg>
+        </span>
+      </div>
+      <p class="status-title" id="statusTitle">Waiting for the host to start…</p>
+      <p class="status-sub" id="statusSub">You're in the room. Once the host starts the party, audio will begin automatically — put your headphones on now.</p>
+    </div>
+  </section>
+
+</div>
+
+<script src="app.js"></script>
+<script>
+  document.getElementById('createRoomBtn').addEventListener('click', enterCreateRoom);
+  document.getElementById('joinRoomBtn').addEventListener('click', () => enterJoinRoom());
+</script>
+</body>
+</html>
