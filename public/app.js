@@ -523,6 +523,9 @@ async function createPeerConnectionForListener(listenerId, audioTrack) {
       if (msg.type === 'pong') {
         msg.from = listenerId;
         handleSyncPong(msg);
+      } else if (msg.type === 'request-sync') {
+        console.log(`Manual re-sync requested by listener ${listenerId}`);
+        recalculateTargetDelay();
       }
     };
 
@@ -1160,13 +1163,68 @@ function handleSyncMessage(msg) {
       );
     }
 
+    const syncContainer = document.getElementById('syncContainer');
     const syncBadge = document.getElementById('syncBadge');
     const syncDot = document.getElementById('syncDot');
     const syncText = document.getElementById('syncText');
+    if (syncContainer) syncContainer.style.display = 'flex';
     if (syncBadge) syncBadge.style.display = 'inline-flex';
     if (syncDot) syncDot.classList.add('synced');
     if (syncText) syncText.textContent = `Synced (${Math.round(myDelay * 1000)}ms buffer)`;
   }
+}
+
+// ---------- Re-Sync Button Handlers ----------
+const resyncListenerBtn = document.getElementById('resyncListenerBtn');
+if (resyncListenerBtn) {
+  resyncListenerBtn.addEventListener('click', () => {
+    resyncListenerBtn.textContent = '⚡ Syncing…';
+    resyncListenerBtn.disabled = true;
+
+    // 1. Ensure AudioContext is active
+    unlockListenerAudio();
+
+    // 2. Request fresh clock-sync / target delay calculation from host
+    if (listenerDataChannel && listenerDataChannel.readyState === 'open') {
+      listenerDataChannel.send(JSON.stringify({ type: 'request-sync' }));
+    } else if (listenerWs && listenerWs.readyState === WebSocket.OPEN) {
+      sendListenerMessage({ type: 'request-sync' });
+    }
+
+    // 3. Reset delayNode value smoothly
+    if (delayNode && audioContext && audioContext.state === 'running') {
+      const currentDelay = delayNode.delayTime.value;
+      delayNode.delayTime.cancelScheduledValues(audioContext.currentTime);
+      delayNode.delayTime.setValueAtTime(currentDelay, audioContext.currentTime);
+    }
+
+    setTimeout(() => {
+      resyncListenerBtn.textContent = '⚡ Synced ✓';
+      setTimeout(() => {
+        resyncListenerBtn.textContent = '⚡ Re-Sync Audio';
+        resyncListenerBtn.disabled = false;
+      }, 1200);
+    }, 400);
+  });
+}
+
+const resyncHostBtn = document.getElementById('resyncHostBtn');
+if (resyncHostBtn) {
+  resyncHostBtn.addEventListener('click', () => {
+    resyncHostBtn.textContent = '⚡ Syncing All…';
+    resyncHostBtn.disabled = true;
+
+    // Recalculate target delay and send sync-config to all listeners
+    recalculateTargetDelay();
+
+    setTimeout(() => {
+      resyncHostBtn.textContent = '⚡ Synced All ✓';
+      setTimeout(() => {
+        resyncHostBtn.textContent = '⚡ Re-Sync All';
+        resyncHostBtn.disabled = false;
+      }, 1200);
+    }, 400);
+  });
 }
 
 // Handle offer from host (listener side)
@@ -1185,8 +1243,8 @@ async function handleOfferFromHost(offer) {
         };
         listenerDataChannel.onopen = () => {
           console.log('Sync DataChannel open');
-          const syncBadge = document.getElementById('syncBadge');
-          if (syncBadge) syncBadge.style.display = 'inline-flex';
+          const syncContainer = document.getElementById('syncContainer');
+          if (syncContainer) syncContainer.style.display = 'flex';
         };
       };
 

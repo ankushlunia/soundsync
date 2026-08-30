@@ -126,8 +126,9 @@
 
     <button class="btn btn-primary" id="startPartyBtn">Start Broadcast</button>
     <div class="host-controls" id="hostControls" style="display:none;">
-      <button class="btn btn-secondary" id="changeTabAudioBtn">🔄 Change Audio Track</button>
-      <button class="btn btn-secondary" id="muteHostSpeakersBtn">🔊 Mute Speakers</button>
+      <button class="btn btn-secondary" id="changeTabAudioBtn">🔄 Change Audio</button>
+      <button class="btn btn-secondary" id="muteHostSpeakersBtn">🔊 Mute Host</button>
+      <button class="btn btn-secondary" id="resyncHostBtn">⚡ Re-Sync All</button>
     </div>
     <p class="err-text" id="createErr"></p>
 
@@ -203,10 +204,15 @@
         🔊 Tap to Start Listening
       </button>
 
-      <!-- Sync status badge -->
-      <div class="sync-badge" id="syncBadge" style="display:none;">
-        <span class="sync-dot" id="syncDot"></span>
-        <span id="syncText">Syncing…</span>
+      <!-- Sync status badge & Re-Sync Button -->
+      <div class="sync-container" id="syncContainer" style="display:none; flex-direction: column; align-items: center; gap: 8px; margin-top: 10px;">
+        <div class="sync-badge" id="syncBadge">
+          <span class="sync-dot" id="syncDot"></span>
+          <span id="syncText">Syncing…</span>
+        </div>
+        <button class="btn btn-secondary btn-small" id="resyncListenerBtn" style="font-size: 12px; padding: 6px 14px;">
+          ⚡ Re-Sync Audio
+        </button>
       </div>
 
       <!-- Volume control -->
