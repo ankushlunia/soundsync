@@ -485,9 +485,9 @@ function recalculateTargetDelay() {
     if (oneWay > maxOneWay) maxOneWay = oneWay;
   }
 
-  // Target delay = max one-way + 150ms safety buffer
-  // Cap at 500ms to prevent excessive delay
-  hostTargetDelay = Math.min(maxOneWay + 150, 500);
+  // Ultra-low latency target delay: max one-way + 35ms safety buffer
+  // Capped at 120ms to keep audio perfectly synced with video/lip-sync
+  hostTargetDelay = Math.min(maxOneWay + 35, 120);
 
   // Broadcast target delay to all listeners via DataChannel
   for (const [id, entry] of hostPeerConnections.entries()) {
@@ -1111,7 +1111,9 @@ function setupListenerAudioPipeline(stream) {
       audioContext.close().catch(() => {});
     }
 
-    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    // Configure AudioContext for lowest possible hardware latency ('interactive' = <15ms buffer)
+    const AudioCtxClass = window.AudioContext || window.webkitAudioContext;
+    audioContext = new AudioCtxClass({ latencyHint: 'interactive' });
     const source = audioContext.createMediaStreamSource(stream);
 
     // DelayNode for sync buffering (max 1 second)
@@ -1252,6 +1254,11 @@ async function handleOfferFromHost(offer) {
       listenerPeerConnection.ontrack = (event) => {
         console.log('Received remote audio track');
         const stream = event.streams[0] || new MediaStream([event.track]);
+
+        // Force zero WebRTC jitter buffer delay for ultra-low latency playback
+        if (event.receiver && 'playoutDelayHint' in event.receiver) {
+          try { event.receiver.playoutDelayHint = 0; } catch (e) {}
+        }
 
         // 1. Direct HTML5 Audio Element (muted, needed for iOS Safari WebRTC background session trigger)
         listenerAudioEl = document.getElementById('listenerAudioElement');
