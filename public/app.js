@@ -189,11 +189,14 @@ window._simulateListenerJoin = () => {
 startPartyBtn.addEventListener('click', async () => {
   createErrEl.textContent = '';
   try {
-    // Captures the movie tab's audio directly from the browser (see project
-    // overview: getDisplayMedia with tab-audio sharing enabled by the host).
+    // Captures the movie tab's audio directly from the browser with high-quality constraints
     const displayStream = await navigator.mediaDevices.getDisplayMedia({
       video: true,
-      audio: true,
+      audio: {
+        autoGainControl: false,
+        echoCancellation: false,
+        noiseSuppression: false,
+      },
     });
 
     const audioTracks = displayStream.getAudioTracks();
@@ -230,7 +233,13 @@ async function createPeerConnectionForListener(listenerId, audioTrack) {
     hostPeerConnections.set(listenerId, pc);
 
     // Add the audio track
-    pc.addTrack(audioTrack, hostStream);
+    const sender = pc.addTrack(audioTrack, hostStream);
+    
+    // Set high bitrate for audio quality
+    const params = sender.getParameters();
+    if (!params.encodings) params.encodings = [{}];
+    params.encodings[0].maxBitrate = 320000; // 320 kbps for high quality
+    await sender.setParameters(params);
 
     // Handle ICE candidates
     pc.onicecandidate = (event) => {
@@ -374,17 +383,29 @@ function enterConnectedState() {
     'Audio is streaming live. Put your headphones on to listen in.';
 }
 
+// Hidden audio element for playing remote stream
+let remoteAudio = null;
+
+function initRemoteAudio() {
+  if (!remoteAudio) {
+    remoteAudio = new Audio();
+    remoteAudio.autoplay = true;
+    remoteAudio.controls = false;
+  }
+  return remoteAudio;
+}
+
 // Handle offer from host (listener side)
 async function handleOfferFromHost(offer) {
   try {
     if (!listenerPeerConnection) {
       listenerPeerConnection = new RTCPeerConnection(rtcConfig);
+      const audio = initRemoteAudio();
 
       // Handle remote audio track
       listenerPeerConnection.ontrack = (event) => {
         console.log('Received remote audio track');
-        // Create an audio element and play the remote audio
-        const audio = new Audio();
+        // Set the remote stream to the audio element for playback
         audio.srcObject = event.streams[0];
         audio.play().catch(err => console.error('Failed to play audio:', err));
       };
