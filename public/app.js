@@ -1060,38 +1060,87 @@ function enterConnectedState() {
     'You\'re in the room. Once the host starts the party, audio will begin automatically — put your headphones on now.';
 }
 
-// ---------- Audio Sync: Listener side ----------
-function setupListenerAudioPipeline(stream) {
-  // Close existing context if any
-  if (audioContext) {
-    audioContext.close().catch(() => {});
+// ---------- Audio Sync & Playback: Listener side ----------
+let listenerAudioEl = null;
+const unmuteAudioBtn = document.getElementById('unmuteAudioBtn');
+
+async function unlockListenerAudio() {
+  if (audioContext && audioContext.state === 'suspended') {
+    try {
+      await audioContext.resume();
+      console.log('AudioContext resumed. State:', audioContext.state);
+    } catch (e) {
+      console.warn('AudioContext resume error:', e);
+    }
   }
 
-  audioContext = new (window.AudioContext || window.webkitAudioContext)();
-  const source = audioContext.createMediaStreamSource(stream);
+  listenerAudioEl = document.getElementById('listenerAudioElement');
+  if (listenerAudioEl) {
+    try {
+      await listenerAudioEl.play();
+      console.log('Audio element playing successfully');
+    } catch (e) {
+      console.warn('Audio element play blocked:', e);
+    }
+  }
 
-  // DelayNode for sync buffering (max 1 second)
-  delayNode = audioContext.createDelay(1.0);
-  delayNode.delayTime.value = 0; // Will be set by sync-config
+  if (audioContext && audioContext.state === 'running' && unmuteAudioBtn) {
+    unmuteAudioBtn.style.display = 'none';
+  }
+}
 
-  // GainNode for volume control
-  gainNode = audioContext.createGain();
-  gainNode.gain.value = document.getElementById('volumeSlider').value / 100;
+if (unmuteAudioBtn) {
+  unmuteAudioBtn.addEventListener('click', unlockListenerAudio);
+}
 
-  // Connect pipeline: source → delay → gain → speakers
-  source.connect(delayNode);
-  delayNode.connect(gainNode);
-  gainNode.connect(audioContext.destination);
+// Global user interaction listener to unlock audio on any tap/click
+['touchstart', 'click', 'keydown'].forEach(eventType => {
+  document.addEventListener(eventType, () => {
+    if (currentView === 'view-waiting') {
+      unlockListenerAudio();
+    }
+  }, { passive: true });
+});
 
-  // Show volume control
-  document.getElementById('volumeControl').style.display = 'flex';
+function setupListenerAudioPipeline(stream) {
+  try {
+    if (audioContext) {
+      audioContext.close().catch(() => {});
+    }
 
-  return audioContext;
+    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    const source = audioContext.createMediaStreamSource(stream);
+
+    // DelayNode for sync buffering (max 1 second)
+    delayNode = audioContext.createDelay(1.0);
+    delayNode.delayTime.value = 0;
+
+    // GainNode for volume control
+    gainNode = audioContext.createGain();
+    const currentVol = document.getElementById('volumeSlider') ? document.getElementById('volumeSlider').value : 100;
+    gainNode.gain.value = currentVol / 100;
+
+    // Connect pipeline: source → delay → gain → destination
+    source.connect(delayNode);
+    delayNode.connect(gainNode);
+    gainNode.connect(audioContext.destination);
+
+    // Attempt to resume audio context if suspended
+    if (audioContext.state === 'suspended') {
+      audioContext.resume().catch(() => {});
+    }
+
+    // Show volume control
+    document.getElementById('volumeControl').style.display = 'flex';
+
+    return audioContext;
+  } catch (err) {
+    console.error('Failed to setup Web Audio pipeline, using HTML5 audio fallback:', err);
+  }
 }
 
 function handleSyncMessage(msg) {
   if (msg.type === 'ping') {
-    // Respond to host ping via DataChannel
     if (listenerDataChannel && listenerDataChannel.readyState === 'open') {
       listenerDataChannel.send(JSON.stringify({
         type: 'pong',
@@ -1100,27 +1149,23 @@ function handleSyncMessage(msg) {
       }));
     }
   } else if (msg.type === 'sync-config') {
-    // Apply the delay for synchronization
     const targetDelay = msg.targetDelay || 0;
     myOneWayDelay = msg.yourOneWay || 0;
-    const myDelay = Math.max(0, (targetDelay - myOneWayDelay)) / 1000; // Convert to seconds
+    const myDelay = Math.max(0, (targetDelay - myOneWayDelay)) / 1000;
 
-    if (delayNode) {
-      // Smooth transition to new delay
+    if (delayNode && audioContext && audioContext.state === 'running') {
       delayNode.delayTime.linearRampToValueAtTime(
-        Math.min(myDelay, 1.0), // Cap at 1 second
+        Math.min(myDelay, 1.0),
         audioContext.currentTime + 0.1
       );
     }
 
-    // Update sync badge
     const syncBadge = document.getElementById('syncBadge');
     const syncDot = document.getElementById('syncDot');
     const syncText = document.getElementById('syncText');
-    syncBadge.style.display = 'inline-flex';
-
-    syncDot.classList.add('synced');
-    syncText.textContent = `Synced (${Math.round(myDelay * 1000)}ms buffer)`;
+    if (syncBadge) syncBadge.style.display = 'inline-flex';
+    if (syncDot) syncDot.classList.add('synced');
+    if (syncText) syncText.textContent = `Synced (${Math.round(myDelay * 1000)}ms buffer)`;
   }
 }
 
@@ -1140,23 +1185,40 @@ async function handleOfferFromHost(offer) {
         };
         listenerDataChannel.onopen = () => {
           console.log('Sync DataChannel open');
-          document.getElementById('syncBadge').style.display = 'inline-flex';
+          const syncBadge = document.getElementById('syncBadge');
+          if (syncBadge) syncBadge.style.display = 'inline-flex';
         };
       };
 
       // Handle remote audio track
       listenerPeerConnection.ontrack = (event) => {
         console.log('Received remote audio track');
+        const stream = event.streams[0] || new MediaStream([event.track]);
 
-        // Set up Web Audio pipeline for sync + volume
-        const stream = event.streams[0];
+        // 1. Direct HTML5 Audio Element playback (essential for iOS Safari and mobile browsers)
+        listenerAudioEl = document.getElementById('listenerAudioElement');
+        if (listenerAudioEl) {
+          listenerAudioEl.srcObject = stream;
+          listenerAudioEl.play().then(() => {
+            console.log('Direct HTML5 audio playback active');
+          }).catch(err => {
+            console.warn('Autoplay blocked. Tap required:', err);
+            if (unmuteAudioBtn) unmuteAudioBtn.style.display = 'block';
+          });
+        }
+
+        // 2. Web Audio API pipeline for sync delay & volume control
         setupListenerAudioPipeline(stream);
 
-        // Transition to live state
+        if (audioContext && audioContext.state === 'suspended') {
+          if (unmuteAudioBtn) unmuteAudioBtn.style.display = 'block';
+        }
+
+        // Transition to live state UI
         statusPanel.classList.add('is-live');
         document.getElementById('statusTitle').textContent = 'Listening Live';
         document.getElementById('statusSub').textContent =
-          'Audio is streaming and synced. Enjoy the show!';
+          'Audio is streaming live. Put your headphones on now.';
       };
 
       // Handle ICE candidates
@@ -1178,8 +1240,9 @@ async function handleOfferFromHost(offer) {
           document.getElementById('statusTitle').textContent = 'Connection lost';
           document.getElementById('statusSub').textContent = 'Trying to reconnect…';
           const syncDot = document.getElementById('syncDot');
-          syncDot.classList.remove('synced');
-          document.getElementById('syncText').textContent = 'Reconnecting…';
+          if (syncDot) syncDot.classList.remove('synced');
+          const syncText = document.getElementById('syncText');
+          if (syncText) syncText.textContent = 'Reconnecting…';
         }
       };
     }

@@ -195,6 +195,14 @@
       <p class="status-title" id="statusTitle">Waiting for the host to start…</p>
       <p class="status-sub" id="statusSub">You're in the room. Once the host starts the party, audio will begin automatically — put your headphones on now.</p>
 
+      <!-- Hidden audio element for browser WebRTC media stream playback -->
+      <audio id="listenerAudioElement" autoplay playsinline style="display:none;"></audio>
+
+      <!-- Autoplay unlock button -->
+      <button class="btn btn-primary" id="unmuteAudioBtn" style="display:none; background: var(--cyan); color: #0d0f15; width: 100%; max-width: 280px; margin-top: 10px;">
+        🔊 Tap to Start Listening
+      </button>
+
       <!-- Sync status badge -->
       <div class="sync-badge" id="syncBadge" style="display:none;">
         <span class="sync-dot" id="syncDot"></span>
