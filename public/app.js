@@ -626,7 +626,7 @@ async function getHostAudioStream(mode) {
       throw new Error('Microphone access requires HTTPS on mobile devices or is not supported.');
     }
     const micStream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
     });
     return micStream;
   }
@@ -1195,19 +1195,18 @@ async function handleOfferFromHost(offer) {
         console.log('Received remote audio track');
         const stream = event.streams[0] || new MediaStream([event.track]);
 
-        // 1. Direct HTML5 Audio Element playback (essential for iOS Safari and mobile browsers)
+        // 1. Direct HTML5 Audio Element (muted, needed for iOS Safari WebRTC background session trigger)
         listenerAudioEl = document.getElementById('listenerAudioElement');
         if (listenerAudioEl) {
           listenerAudioEl.srcObject = stream;
-          listenerAudioEl.play().then(() => {
-            console.log('Direct HTML5 audio playback active');
-          }).catch(err => {
+          listenerAudioEl.muted = true; // MUST be muted so it doesn't cause duplicate audio echo with AudioContext!
+          listenerAudioEl.play().catch(err => {
             console.warn('Autoplay blocked. Tap required:', err);
             if (unmuteAudioBtn) unmuteAudioBtn.style.display = 'block';
           });
         }
 
-        // 2. Web Audio API pipeline for sync delay & volume control
+        // 2. Web Audio API pipeline (SINGLE primary audio output with sync delay & volume control)
         setupListenerAudioPipeline(stream);
 
         if (audioContext && audioContext.state === 'suspended') {
