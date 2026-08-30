@@ -13,6 +13,10 @@ function showView(id) {
   
   // Clean up connections when leaving
   if (id === 'view-landing') {
+    // Notify all listeners that host is disconnecting
+    if (hostWs && hostWs.readyState === WebSocket.OPEN) {
+      sendHostMessage({ type: 'host-cancel' });
+    }
     if (hostWs) hostWs.close();
     if (listenerWs) listenerWs.close();
     hostWs = null;
@@ -355,6 +359,13 @@ joinContinueBtn.addEventListener('click', () => {
         listenerPeerConnection.addIceCandidate(new RTCIceCandidate(msg.candidate))
           .catch(err => console.error('Failed to add ICE candidate:', err));
       }
+    } else if (msg.type === 'host-disconnected') {
+      // Host closed the party
+      joinErrEl.textContent = 'Host cancelled the party';
+      if (listenerPeerConnection) listenerPeerConnection.close();
+      listenerPeerConnection = null;
+      listenerWs.close();
+      setTimeout(() => showView('view-landing'), 2000);
     }
   };
 
@@ -448,3 +459,22 @@ async function handleOfferFromHost(offer) {
     enterJoinRoom(code.toUpperCase());
   }
 })();
+
+// ---------- Handle tab close / page unload ----------
+window.addEventListener('beforeunload', () => {
+  // Close host WebSocket to notify all listeners
+  if (hostWs) {
+    hostWs.close();
+  }
+  // Close listener WebSocket
+  if (listenerWs) {
+    listenerWs.close();
+  }
+  // Close peer connections
+  for (const pc of hostPeerConnections.values()) {
+    pc.close();
+  }
+  if (listenerPeerConnection) {
+    listenerPeerConnection.close();
+  }
+});

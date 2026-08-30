@@ -53,6 +53,15 @@ wss.on('connection', (ws, req) => {
       let msg;
       try { msg = JSON.parse(data); } catch { return; }
       
+      // Host cancel party
+      if (msg.type === 'host-cancel') {
+        for (const listenerWs of listeners.values()) {
+          send(listenerWs, { type: 'host-disconnected' });
+        }
+        listeners.clear();
+        return;
+      }
+      
       // WebRTC signaling: forward to specific listener
       if (msg.type === 'offer' || msg.type === 'ice-candidate') {
         const target = listeners.get(msg.id);
@@ -70,7 +79,14 @@ wss.on('connection', (ws, req) => {
 
     ws.on('close', () => {
       console.log('Host disconnected.');
-      if (hostSocket === ws) hostSocket = null;
+      if (hostSocket === ws) {
+        // Notify all listeners that host has disconnected
+        for (const listenerWs of listeners.values()) {
+          send(listenerWs, { type: 'host-disconnected' });
+        }
+        hostSocket = null;
+        listeners.clear(); // Clear all listeners when host disconnects
+      }
       broadcastStatus();
     });
 
