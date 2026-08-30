@@ -10,6 +10,14 @@
 const views = document.querySelectorAll('.view');
 function showView(id) {
   views.forEach(v => v.classList.toggle('active', v.id === id));
+  
+  // Clean up connections when leaving
+  if (id === 'view-landing') {
+    if (hostWs) hostWs.close();
+    if (listenerWs) listenerWs.close();
+    hostWs = null;
+    listenerWs = null;
+  }
 }
 document.querySelectorAll('[data-nav]').forEach(el => {
   el.addEventListener('click', () => showView(el.dataset.nav));
@@ -30,6 +38,13 @@ function generateRoomCode(length = 6) {
 
 let currentRoomCode = null;
 let hostStream = null; // captured tab/system audio, set when broadcasting starts
+let hostWs = null; // WebSocket connection for host
+let listenerWs = null; // WebSocket connection for listener
+
+// ---------- WebSocket connection ----------
+function getWsProtocol() {
+  return location.protocol === 'https:' ? 'wss:' : 'ws:';
+}
 
 // ---------- Create Room flow ----------
 const freqCodeEl = document.getElementById('freqCode');
@@ -64,9 +79,33 @@ function enterCreateRoom() {
 
   showView('view-create');
 
-  // TODO: open WebSocket to signaling server as role=host with currentRoomCode
-  // ws = new WebSocket(`${wsProto}://${location.host}/ws?role=host&room=${currentRoomCode}`)
-  // On 'listener-join' messages -> addListenerRow(id, label)
+  // Open WebSocket connection as host
+  if (hostWs) hostWs.close();
+  const wsProto = getWsProtocol();
+  hostWs = new WebSocket(`${wsProto}//${location.host}?role=host&room=${currentRoomCode}`);
+  
+  hostWs.onopen = () => {
+    console.log('Host connected to signaling server');
+  };
+
+  hostWs.onmessage = (event) => {
+    const msg = JSON.parse(event.data);
+    if (msg.type === 'listener-join') {
+      addListenerRow(msg.id, 'Guest ' + (listenerListEl.children.length + 1));
+    } else if (msg.type === 'listener-leave') {
+      removeListenerRow(msg.id);
+    }
+  };
+
+  hostWs.onerror = (err) => {
+    console.error('Host WebSocket error:', err);
+    createErrEl.textContent = 'Failed to connect to server';
+  };
+
+  hostWs.onclose = () => {
+    console.log('Host disconnected from server');
+    hostWs = null;
+  };
 }
 
 function updateLobbyCount(n) {
@@ -144,6 +183,8 @@ document.getElementById('copyCodeBtn').addEventListener('click', async () => {
 document.getElementById('endPartyBtn').addEventListener('click', () => {
   if (hostStream) hostStream.getTracks().forEach(t => t.stop());
   hostStream = null;
+  if (hostWs) hostWs.close();
+  hostWs = null;
   showView('view-landing');
 });
 
@@ -188,9 +229,33 @@ joinContinueBtn.addEventListener('click', () => {
   waitingCodeEl.textContent = code.slice(0, 3) + ' ' + code.slice(3);
   showView('view-waiting');
 
-  // TODO: open WebSocket to signaling server as role=listener&room=${code}
-  // On 'offer' -> create RTCPeerConnection, setRemoteDescription, answer.
-  // On successful connection -> call enterConnectedState().
+  // Open WebSocket connection as listener
+  if (listenerWs) listenerWs.close();
+  const wsProto = getWsProtocol();
+  listenerWs = new WebSocket(`${wsProto}//${location.host}?role=listener&room=${code}`);
+  
+  listenerWs.onopen = () => {
+    console.log('Listener connected to signaling server');
+  };
+
+  listenerWs.onmessage = (event) => {
+    const msg = JSON.parse(event.data);
+    if (msg.type === 'welcome') {
+      console.log('Listener ID:', msg.id);
+      enterConnectedState();
+    }
+  };
+
+  listenerWs.onerror = (err) => {
+    console.error('Listener WebSocket error:', err);
+    joinErrEl.textContent = 'Failed to connect to server';
+    showView('view-join');
+  };
+
+  listenerWs.onclose = () => {
+    console.log('Listener disconnected from server');
+    listenerWs = null;
+  };
 });
 
 document.getElementById('scanBtn').addEventListener('click', () => {
