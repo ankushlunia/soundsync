@@ -243,6 +243,7 @@ startPartyBtn.addEventListener('click', async () => {
 
     startPartyBtn.textContent = 'Broadcasting…';
     startPartyBtn.disabled = true;
+    document.getElementById('changeTabAudioBtn').style.display = 'block'; // Show change tab audio button
 
     // Create RTCPeerConnection for each connected listener and send the audio
     const audioTrack = audioTracks[0];
@@ -316,8 +317,61 @@ document.getElementById('endPartyBtn').addEventListener('click', () => {
   hostStream = null;
   if (hostWs) hostWs.close();
   hostWs = null;
+  document.getElementById('changeTabAudioBtn').style.display = 'none'; // Hide change tab audio button
   clearRoomState(); // Clear saved room state
   showView('view-landing');
+});
+
+document.getElementById('changeTabAudioBtn').addEventListener('click', async () => {
+  createErrEl.textContent = '';
+  try {
+    // Capture new tab audio
+    const displayStream = await navigator.mediaDevices.getDisplayMedia({
+      video: true,
+      audio: {
+        autoGainControl: false,
+        echoCancellation: false,
+        noiseSuppression: false,
+      },
+    });
+
+    const audioTracks = displayStream.getAudioTracks();
+    if (audioTracks.length === 0) {
+      displayStream.getTracks().forEach(t => t.stop());
+      createErrEl.textContent = 'No audio was shared. Please share tab audio.';
+      return;
+    }
+
+    // Stop video immediately
+    displayStream.getVideoTracks().forEach(t => t.stop());
+    
+    // Stop old audio tracks
+    if (hostStream) {
+      hostStream.getTracks().forEach(t => t.stop());
+    }
+    
+    const newAudioTrack = audioTracks[0];
+    hostStream = new MediaStream([newAudioTrack]);
+
+    // Replace audio track on all peer connections
+    for (const [listenerId, pc] of hostPeerConnections.entries()) {
+      const sender = pc.getSenders().find(s => s.track && s.track.kind === 'audio');
+      if (sender) {
+        await sender.replaceTrack(newAudioTrack);
+        console.log(`Replaced audio track for listener ${listenerId}`);
+      }
+    }
+
+    createErrEl.textContent = 'Tab audio changed!';
+    setTimeout(() => {
+      createErrEl.textContent = '';
+    }, 2000);
+
+  } catch (err) {
+    if (err.name !== 'NotAllowedError') {
+      createErrEl.textContent = 'Couldn\'t capture new tab audio: ' + err.message;
+    }
+  }
 });
 
 // ---------- Join Room flow ----------
