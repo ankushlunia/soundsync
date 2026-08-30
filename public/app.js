@@ -465,6 +465,20 @@ document.getElementById('scanBtn').addEventListener('click', () => {
   joinErrEl.textContent = 'Camera scanning isn\'t wired up yet — enter the code manually for now.';
 });
 
+document.getElementById('exitPartyBtn').addEventListener('click', () => {
+  // Close peer connection and WebSocket
+  if (listenerPeerConnection) {
+    listenerPeerConnection.close();
+    listenerPeerConnection = null;
+  }
+  if (listenerWs && listenerWs.readyState === WebSocket.OPEN) {
+    listenerWs.close();
+  }
+  listenerWs = null;
+  // Return to landing page
+  showView('view-landing');
+});
+
 // ---------- Connected state (listener) ----------
 const statusPanel = document.getElementById('statusPanel');
 function enterConnectedState() {
