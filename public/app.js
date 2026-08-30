@@ -40,10 +40,37 @@ let currentRoomCode = null;
 let hostStream = null; // captured tab/system audio, set when broadcasting starts
 let hostWs = null; // WebSocket connection for host
 let listenerWs = null; // WebSocket connection for listener
+let hostPeerConnections = new Map(); // id -> RTCPeerConnection for host
+let listenerPeerConnection = null; // RTCPeerConnection for listener
+let listenerId = null; // listener's own ID from server
 
 // ---------- WebSocket connection ----------
 function getWsProtocol() {
   return location.protocol === 'https:' ? 'wss:' : 'ws:';
+}
+
+// ---------- WebRTC configuration ----------
+const rtcConfig = {
+  iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' },
+    { urls: 'stun:stun3.l.google.com:19302' },
+    { urls: 'stun:stun4.l.google.com:19302' },
+  ]
+};
+
+// Helper to send WebRTC signaling messages through WebSocket
+function sendHostMessage(msg) {
+  if (hostWs && hostWs.readyState === WebSocket.OPEN) {
+    hostWs.send(JSON.stringify(msg));
+  }
+}
+
+function sendListenerMessage(msg) {
+  if (listenerWs && listenerWs.readyState === WebSocket.OPEN) {
+    listenerWs.send(JSON.stringify(msg));
+  }
 }
 
 // ---------- Create Room flow ----------
@@ -92,8 +119,31 @@ function enterCreateRoom() {
     const msg = JSON.parse(event.data);
     if (msg.type === 'listener-join') {
       addListenerRow(msg.id, 'Guest ' + (listenerListEl.children.length + 1));
+      // If already broadcasting, create peer connection for new listener
+      if (hostStream) {
+        createPeerConnectionForListener(msg.id, hostStream.getTracks()[0]);
+      }
     } else if (msg.type === 'listener-leave') {
       removeListenerRow(msg.id);
+      const pc = hostPeerConnections.get(msg.id);
+      if (pc) {
+        pc.close();
+        hostPeerConnections.delete(msg.id);
+      }
+    } else if (msg.type === 'answer') {
+      // Listener sent back an answer
+      const pc = hostPeerConnections.get(msg.from);
+      if (pc) {
+        pc.setRemoteDescription(new RTCSessionDescription(msg.answer))
+          .catch(err => console.error(`Failed to set remote description for ${msg.from}:`, err));
+      }
+    } else if (msg.type === 'ice-candidate') {
+      // Listener sent ICE candidate
+      const pc = hostPeerConnections.get(msg.from);
+      if (pc && msg.candidate) {
+        pc.addIceCandidate(new RTCIceCandidate(msg.candidate))
+          .catch(err => console.error(`Failed to add ICE candidate from ${msg.from}:`, err));
+      }
     }
   };
 
@@ -162,13 +212,56 @@ startPartyBtn.addEventListener('click', async () => {
     startPartyBtn.textContent = 'Broadcasting…';
     startPartyBtn.disabled = true;
 
-    // TODO: for each connected listener id, create an RTCPeerConnection,
-    // addTrack(audioTracks[0], hostStream), create + send an offer.
+    // Create RTCPeerConnection for each connected listener and send the audio
+    const audioTrack = audioTracks[0];
+    for (const [listenerId, row] of Array.from(listenerListEl.querySelectorAll('[data-listener-id]')).entries()) {
+      const id = row.dataset.listenerId;
+      createPeerConnectionForListener(id, audioTrack);
+    }
 
   } catch (err) {
     createErrEl.textContent = 'Couldn\'t capture audio: ' + err.message;
   }
 });
+
+async function createPeerConnectionForListener(listenerId, audioTrack) {
+  try {
+    const pc = new RTCPeerConnection(rtcConfig);
+    hostPeerConnections.set(listenerId, pc);
+
+    // Add the audio track
+    pc.addTrack(audioTrack, hostStream);
+
+    // Handle ICE candidates
+    pc.onicecandidate = (event) => {
+      if (event.candidate) {
+        sendHostMessage({
+          type: 'ice-candidate',
+          id: listenerId,
+          candidate: event.candidate
+        });
+      }
+    };
+
+    pc.onconnectionstatechange = () => {
+      console.log(`Peer connection with ${listenerId}: ${pc.connectionState}`);
+      if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+        hostPeerConnections.delete(listenerId);
+      }
+    };
+
+    // Create and send offer
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    sendHostMessage({
+      type: 'offer',
+      id: listenerId,
+      offer: offer
+    });
+  } catch (err) {
+    console.error(`Failed to create peer connection for ${listenerId}:`, err);
+  }
+}
 
 document.getElementById('copyCodeBtn').addEventListener('click', async () => {
   try {
@@ -241,8 +334,18 @@ joinContinueBtn.addEventListener('click', () => {
   listenerWs.onmessage = (event) => {
     const msg = JSON.parse(event.data);
     if (msg.type === 'welcome') {
+      listenerId = msg.id;
       console.log('Listener ID:', msg.id);
       enterConnectedState();
+    } else if (msg.type === 'offer') {
+      // Host sent an offer with audio
+      handleOfferFromHost(msg.offer);
+    } else if (msg.type === 'ice-candidate') {
+      // Host sent ICE candidate
+      if (listenerPeerConnection && msg.candidate) {
+        listenerPeerConnection.addIceCandidate(new RTCIceCandidate(msg.candidate))
+          .catch(err => console.error('Failed to add ICE candidate:', err));
+      }
     }
   };
 
@@ -269,6 +372,51 @@ function enterConnectedState() {
   document.getElementById('statusTitle').textContent = 'Connected';
   document.getElementById('statusSub').textContent =
     'Audio is streaming live. Put your headphones on to listen in.';
+}
+
+// Handle offer from host (listener side)
+async function handleOfferFromHost(offer) {
+  try {
+    if (!listenerPeerConnection) {
+      listenerPeerConnection = new RTCPeerConnection(rtcConfig);
+
+      // Handle remote audio track
+      listenerPeerConnection.ontrack = (event) => {
+        console.log('Received remote audio track');
+        // Create an audio element and play the remote audio
+        const audio = new Audio();
+        audio.srcObject = event.streams[0];
+        audio.play().catch(err => console.error('Failed to play audio:', err));
+      };
+
+      // Handle ICE candidates
+      listenerPeerConnection.onicecandidate = (event) => {
+        if (event.candidate) {
+          sendListenerMessage({
+            type: 'ice-candidate',
+            candidate: event.candidate
+          });
+        }
+      };
+
+      listenerPeerConnection.onconnectionstatechange = () => {
+        console.log(`Peer connection state: ${listenerPeerConnection.connectionState}`);
+      };
+    }
+
+    // Set remote description (the offer from host)
+    await listenerPeerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+
+    // Create and send answer
+    const answer = await listenerPeerConnection.createAnswer();
+    await listenerPeerConnection.setLocalDescription(answer);
+    sendListenerMessage({
+      type: 'answer',
+      answer: answer
+    });
+  } catch (err) {
+    console.error('Failed to handle offer from host:', err);
+  }
 }
 
 // ---------- Deep link support (?code=XXXXXX from a scanned QR) ----------

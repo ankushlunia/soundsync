@@ -52,8 +52,20 @@ wss.on('connection', (ws, req) => {
     ws.on('message', (data) => {
       let msg;
       try { msg = JSON.parse(data); } catch { return; }
-      const target = listeners.get(msg.id);
-      if (target) send(target, msg);
+      
+      // WebRTC signaling: forward to specific listener
+      if (msg.type === 'offer' || msg.type === 'ice-candidate') {
+        const target = listeners.get(msg.id);
+        if (target) {
+          // Add sender info for listener
+          msg.from = 'host';
+          send(target, msg);
+        }
+      } else {
+        // Other messages
+        const target = listeners.get(msg.id);
+        if (target) send(target, msg);
+      }
     });
 
     ws.on('close', () => {
@@ -74,8 +86,16 @@ wss.on('connection', (ws, req) => {
     ws.on('message', (data) => {
       let msg;
       try { msg = JSON.parse(data); } catch { return; }
-      msg.id = id;
-      send(hostSocket, msg);
+      
+      // WebRTC signaling: forward to host with sender ID
+      if (msg.type === 'answer' || msg.type === 'ice-candidate') {
+        msg.from = id;
+        send(hostSocket, msg);
+      } else {
+        // Other messages
+        msg.id = id;
+        send(hostSocket, msg);
+      }
     });
 
     ws.on('close', () => {
