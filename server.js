@@ -92,7 +92,7 @@ function getLocalIPs() {
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   const ips = getLocalIPs();
-  console.log(`\nSilent Broadcast (WebRTC, low-latency) running on port ${PORT}\n`);
+  console.log(`\nSoundSync running on port ${PORT}\n`);
   console.log('On the HOST device, open:');
   console.log(`  http://localhost:${PORT}/host.html`);
   if (ips.length) {
