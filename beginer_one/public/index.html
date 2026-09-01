@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SoundSync — Beginner Edition</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="vendor/qrcode.min.js"></script>
+</head>
+<body>
+
+  <div class="container">
+    <!-- Header -->
+    <header class="header">
+      <h1>🎧 SoundSync</h1>
+      <p class="subtitle">Broadcast live audio over Wi-Fi to headphones. Simple & Private.</p>
+    </header>
+
+    <!-- ==================== VIEW 1: LANDING (Choose Role) ==================== -->
+    <section id="view-landing" class="card view active">
+      <h2>Select Your Role</h2>
+      <p>Choose whether you want to broadcast audio or listen in.</p>
+      
+      <div class="button-group">
+        <button id="btnCreateRoom" class="btn btn-primary">🎙️ Host a Broadcast (Create Room)</button>
+        <button id="btnJoinRoom" class="btn btn-secondary">🎧 Join as Listener</button>
+      </div>
+    </section>
+
+    <!-- ==================== VIEW 2: HOST (Create Room) ==================== -->
+    <section id="view-host" class="card view">
+      <div class="card-header">
+        <h2>🎙️ Host Room</h2>
+        <button class="btn btn-small btn-back" data-back="view-landing">← Back</button>
+      </div>
+
+      <div class="room-info">
+        <label>Room Code:</label>
+        <div class="code-display" id="hostRoomCode">------</div>
+        <canvas id="qrCanvas"></canvas>
+        <button id="btnCopyCode" class="btn btn-small">📋 Copy Room Code</button>
+      </div>
+
+      <div class="section-box">
+        <h3>1. Select Audio Source</h3>
+        <select id="audioSourceSelect" class="input-select">
+          <option value="tab">🖥️ Tab / System Audio (Desktop)</option>
+          <option value="mic">🎙️ Microphone / Line-In (Mobile & TV)</option>
+          <option value="file">📁 Play Local Audio File (MP3/WAV)</option>
+          <option value="url">📻 Online Audio URL / Stream</option>
+        </select>
+
+        <!-- Mode: File -->
+        <div id="sourceFileBox" class="sub-box" style="display:none;">
+          <input type="file" id="hostFileInput" accept="audio/*">
+          <audio id="hostAudioPlayer" controls style="width:100%; margin-top:8px;"></audio>
+        </div>
+
+        <!-- Mode: URL -->
+        <div id="sourceUrlBox" class="sub-box" style="display:none;">
+          <input type="url" id="hostUrlInput" placeholder="Enter audio URL (https://...)" class="input-text">
+        </div>
+      </div>
+
+      <div class="section-box">
+        <h3>2. Connected Listeners (<span id="listenerCount">0</span>)</h3>
+        <div id="listenerList" class="listener-list">
+          <p class="text-muted">No listeners connected yet.</p>
+        </div>
+      </div>
+
+      <button id="btnStartBroadcast" class="btn btn-primary btn-large">▶️ Start Broadcast</button>
+      <button id="btnEndRoom" class="btn btn-danger btn-large" style="margin-top:10px;">❌ End Room</button>
+      <p id="hostStatusMsg" class="status-msg"></p>
+    </section>
+
+    <!-- ==================== VIEW 3: LISTENER (Join Room) ==================== -->
+    <section id="view-join" class="card view">
+      <div class="card-header">
+        <h2>🎧 Join Broadcast</h2>
+        <button class="btn btn-small btn-back" data-back="view-landing">← Back</button>
+      </div>
+
+      <p>Enter the 6-character room code from the host screen:</p>
+      
+      <div class="join-box">
+        <input type="text" id="joinCodeInput" placeholder="Enter Code (e.g. ABC123)" maxlength="6" class="input-code">
+        <button id="btnConnectListener" class="btn btn-primary">Connect to Room</button>
+      </div>
+
+      <p id="joinStatusMsg" class="status-msg"></p>
+
+      <!-- Connected State UI -->
+      <div id="listenerConnectedBox" class="section-box" style="display:none;">
+        <h3 id="listenerStateTitle">Waiting for Host…</h3>
+        <p id="listenerStateSub">You are connected to the room.</p>
+
+        <!-- Hidden audio element for browser WebRTC media stream playback -->
+        <audio id="listenerAudioElement" autoplay playsinline style="display:none;"></audio>
+
+        <!-- Autoplay Unlock Button -->
+        <button id="btnUnmuteAudio" class="btn btn-primary" style="display:none;">🔊 Tap to Start Listening</button>
+
+        <!-- Sync Indicator & Manual Re-Sync -->
+        <div class="sync-row">
+          <span id="syncBadge" class="badge badge-sync">Sync: Ready</span>
+          <button id="btnResyncAudio" class="btn btn-small btn-secondary">⚡ Re-Sync Audio</button>
+        </div>
+
+        <!-- Volume Control -->
+        <div class="volume-row">
+          <label for="volumeSlider">🔊 Volume:</label>
+          <input type="range" id="volumeSlider" min="0" max="100" value="100">
+          <span id="volumeValue">100%</span>
+        </div>
+
+        <button id="btnExitParty" class="btn btn-danger" style="margin-top:15px;">Exit Room</button>
+      </div>
+    </section>
+
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
