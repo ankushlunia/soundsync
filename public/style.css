@@ -1,0 +1,236 @@
+/* ==========================================================================
+   SoundSync — Classic 2000's Boxy HTML Stylesheet
+   Pure, functional, boxy layout with zero modern AI-fluff, no frosted glass.
+   ========================================================================== */
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  border-radius: 0 !important; /* Strictly boxy */
+}
+
+body {
+  font-family: Verdana, Tahoma, Arial, Helvetica, sans-serif;
+  font-size: 12px;
+  background-color: #e4e4e4;
+  color: #000000;
+  padding: 20px 10px;
+  line-height: 1.4;
+}
+
+/* Page Frame */
+.page-container {
+  max-width: 520px;
+  margin: 0 auto;
+  background: #ffffff;
+  border: 1px solid #666666;
+  box-shadow: 2px 2px 0px #888888;
+}
+
+/* Classic Header */
+.site-header {
+  background-color: #003366;
+  color: #ffffff;
+  padding: 12px 14px;
+  border-bottom: 2px solid #001f3f;
+}
+
+.site-header h1 {
+  font-size: 20px;
+  font-weight: bold;
+  letter-spacing: 0.5px;
+  margin-bottom: 2px;
+}
+
+.tagline {
+  font-size: 11px;
+  color: #b0c4de;
+}
+
+/* Status Bar */
+.status-bar {
+  background-color: #d4d0c8;
+  border-top: 1px solid #ffffff;
+  border-bottom: 1px solid #808080;
+  padding: 3px 8px;
+  font-size: 11px;
+  color: #333333;
+}
+
+/* Main Content Box */
+.content-box {
+  padding: 14px;
+  background-color: #ffffff;
+}
+
+/* Views */
+.view {
+  display: none;
+}
+
+.view.active {
+  display: block;
+}
+
+.view-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid #cccccc;
+  padding-bottom: 8px;
+  margin-bottom: 12px;
+}
+
+.view-header h2 {
+  font-size: 14px;
+  color: #003366;
+}
+
+/* Classic HTML Fieldset */
+fieldset {
+  border: 1px solid #999999;
+  background-color: #fafafa;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+}
+
+legend {
+  font-size: 11.5px;
+  font-weight: bold;
+  color: #003366;
+  padding: 0 4px;
+}
+
+/* Form Controls */
+label {
+  font-size: 11px;
+  color: #222222;
+}
+
+.form-control {
+  font-family: Verdana, Tahoma, sans-serif;
+  font-size: 12px;
+  padding: 4px 6px;
+  border: 1px solid #7f9db9;
+  background: #ffffff;
+  color: #000000;
+}
+
+select.form-control {
+  cursor: pointer;
+}
+
+/* Buttons - Classic 2000s Bevel / Flat Style */
+.btn {
+  font-family: Verdana, Tahoma, sans-serif;
+  font-size: 11.5px;
+  padding: 5px 12px;
+  background-color: #ece9d8;
+  color: #000000;
+  border: 1px solid #707070;
+  cursor: pointer;
+  text-decoration: none;
+  display: inline-block;
+}
+
+.btn:hover {
+  background-color: #e0ded0;
+  border-color: #333333;
+}
+
+.btn:active {
+  background-color: #c8c5b5;
+  border: 1px solid #000000;
+}
+
+.btn-primary {
+  background-color: #003366;
+  color: #ffffff;
+  border: 1px solid #001f3f;
+}
+
+.btn-primary:hover {
+  background-color: #004080;
+  color: #ffffff;
+}
+
+.btn-success {
+  background-color: #287233;
+  color: #ffffff;
+  border: 1px solid #1c5224;
+}
+
+.btn-success:hover {
+  background-color: #2e853b;
+}
+
+.btn-danger {
+  background-color: #a82424;
+  color: #ffffff;
+  border: 1px solid #7d1b1b;
+}
+
+.btn-danger:hover {
+  background-color: #bd2828;
+}
+
+.btn-small {
+  font-size: 11px;
+  padding: 3px 8px;
+}
+
+/* Code Display Box */
+.code-box {
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 24px;
+  font-weight: bold;
+  letter-spacing: 4px;
+  text-align: center;
+  color: #003366;
+  background-color: #ffffd8;
+  border: 1px dashed #003366;
+  padding: 8px 4px;
+  margin: 6px 0;
+}
+
+/* Listener List */
+.listener-box {
+  background: #ffffff;
+  border: 1px solid #cccccc;
+  padding: 6px;
+  min-height: 50px;
+  max-height: 120px;
+  overflow-y: auto;
+  margin-top: 4px;
+}
+
+.listener-item {
+  padding: 4px 6px;
+  border-bottom: 1px dotted #dddddd;
+  font-size: 11px;
+  color: #333333;
+}
+
+.listener-item:last-child {
+  border-bottom: none;
+}
+
+/* Status Messages */
+.status-text {
+  font-size: 11px;
+  color: #003366;
+  margin-top: 8px;
+  min-height: 16px;
+  font-weight: bold;
+}
+
+/* Footer */
+.site-footer {
+  background-color: #ece9d8;
+  border-top: 1px solid #d4d0c8;
+  padding: 8px 12px;
+  font-size: 10px;
+  color: #666666;
+  text-align: center;
+}

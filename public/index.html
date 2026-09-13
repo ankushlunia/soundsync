@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SoundSync - Audio Broadcast</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="vendor/qrcode.min.js"></script>
+</head>
+<body>
+
+  <div class="page-container">
+    <!-- Header banner -->
+    <div class="site-header">
+      <h1>SoundSync</h1>
+      <p class="tagline">Local Wi-Fi Audio Broadcasting Utility</p>
+    </div>
+
+    <!-- Status bar -->
+    <div class="status-bar">
+      <span>Protocol: WebRTC P2P</span>
+      <span style="float: right;">Status: Ready</span>
+    </div>
+
+    <!-- MAIN BODY -->
+    <div class="content-box">
+
+      <!-- VIEW 1: LANDING -->
+      <div id="view-landing" class="view active">
+        <fieldset>
+          <legend>Choose an Option</legend>
+          <p style="margin-bottom: 15px; font-size: 12px; color: #333;">
+            Select whether you want to host an audio stream from this device or join an existing broadcast as a listener.
+          </p>
+
+          <table style="width: 100%; border-collapse: collapse;">
+            <tr>
+              <td style="padding: 6px 0;">
+                <button id="btnCreateRoom" class="btn btn-primary" style="width: 100%; text-align: left; padding: 10px;">
+                  <strong>Host a Broadcast (Create Room)</strong><br>
+                  <span style="font-size: 11px; color: #e0e8f0;">Broadcast tab audio, mic, or local files to nearby devices.</span>
+                </button>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding: 6px 0;">
+                <button id="btnJoinRoom" class="btn" style="width: 100%; text-align: left; padding: 10px;">
+                  <strong>Join as Listener</strong><br>
+                  <span style="font-size: 11px; color: #555;">Listen to an ongoing audio stream using a 6-character room code.</span>
+                </button>
+              </td>
+            </tr>
+          </table>
+        </fieldset>
+      </div>
+
+      <!-- VIEW 2: HOST -->
+      <div id="view-host" class="view">
+        <div class="view-header">
+          <h2>Host Control Panel</h2>
+          <button class="btn btn-small" data-back="view-landing">&lt;&lt; Back to Menu</button>
+        </div>
+
+        <fieldset>
+          <legend>Room Information</legend>
+          <table style="width: 100%; font-size: 12px;">
+            <tr>
+              <td style="vertical-align: top; width: 60%;">
+                <label><strong>Room Code:</strong></label>
+                <div class="code-box" id="hostRoomCode">------</div>
+                <button id="btnCopyCode" class="btn btn-small" style="margin-top: 6px;">Copy Room Code</button>
+              </td>
+              <td style="text-align: center; vertical-align: top;">
+                <label><strong>Scan to Join:</strong></label>
+                <div style="margin-top: 6px;">
+                  <canvas id="qrCanvas" style="border: 1px solid #808080; background: #fff;"></canvas>
+                </div>
+              </td>
+            </tr>
+          </table>
+        </fieldset>
+
+        <fieldset>
+          <legend>Audio Source Configuration</legend>
+          <div style="margin-bottom: 8px;">
+            <label for="audioSourceSelect"><strong>Select Source:</strong></label>
+            <select id="audioSourceSelect" class="form-control" style="width: 100%; margin-top: 4px;">
+              <option value="tab">Tab / System Audio (Desktop)</option>
+              <option value="mic">Microphone / Line-In</option>
+              <option value="file">Play Local Audio File (MP3 / WAV)</option>
+              <option value="url">Online Audio Stream URL</option>
+            </select>
+          </div>
+
+          <div id="sourceFileBox" style="display: none; margin-top: 8px; padding: 8px; border: 1px dashed #808080; background: #f9f9f9;">
+            <label>Select audio file:</label><br>
+            <input type="file" id="hostFileInput" accept="audio/*" style="margin: 6px 0;"><br>
+            <audio id="hostAudioPlayer" controls style="width: 100%; margin-top: 4px;"></audio>
+          </div>
+
+          <div id="sourceUrlBox" style="display: none; margin-top: 8px; padding: 8px; border: 1px dashed #808080; background: #f9f9f9;">
+            <label>Audio Stream URL:</label><br>
+            <input type="url" id="hostUrlInput" placeholder="https://..." class="form-control" style="width: 100%; margin-top: 4px;">
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>Connected Listeners (<span id="listenerCount">0</span>)</legend>
+          <div id="listenerList" class="listener-box">
+            <p class="text-muted" style="font-style: italic; color: #777;">No listeners connected yet.</p>
+          </div>
+        </fieldset>
+
+        <div style="margin-top: 15px;">
+          <button id="btnStartBroadcast" class="btn btn-success" style="width: 100%; padding: 10px; font-weight: bold;">Start Broadcast</button>
+          <button id="btnEndRoom" class="btn btn-danger" style="width: 100%; padding: 8px; margin-top: 8px;">End Broadcast Room</button>
+        </div>
+        <p id="hostStatusMsg" class="status-text"></p>
+      </div>
+
+      <!-- VIEW 3: LISTENER -->
+      <div id="view-join" class="view">
+        <div class="view-header">
+          <h2>Listener Connection</h2>
+          <button class="btn btn-small" data-back="view-landing">&lt;&lt; Back to Menu</button>
+        </div>
+
+        <fieldset>
+          <legend>Enter Room Code</legend>
+          <p style="font-size: 12px; margin-bottom: 10px;">Type the 6-character room code from the host screen:</p>
+          <div style="display: flex; gap: 8px;">
+            <input type="text" id="joinCodeInput" maxlength="6" placeholder="CODE" class="form-control" style="font-family: 'Courier New', monospace; font-size: 18px; font-weight: bold; text-align: center; width: 140px; text-transform: uppercase;">
+            <button id="btnConnectListener" class="btn btn-primary" style="flex: 1;">Connect</button>
+          </div>
+          <p id="joinStatusMsg" class="status-text"></p>
+        </fieldset>
+
+        <div id="listenerConnectedBox" style="display: none; margin-top: 15px;">
+          <fieldset>
+            <legend>Broadcast Playback</legend>
+            
+            <div style="background: #eef3f8; border: 1px solid #b8cde3; padding: 10px; margin-bottom: 12px;">
+              <strong id="listenerStateTitle" style="display: block; font-size: 13px; color: #003366;">Connected to Room</strong>
+              <span id="listenerStateSub" style="font-size: 12px; color: #555;">Waiting for host audio stream...</span>
+            </div>
+
+            <audio id="listenerAudioElement" autoplay playsinline style="display:none;"></audio>
+
+            <button id="btnUnmuteAudio" class="btn btn-success" style="display:none; width: 100%; padding: 10px; margin-bottom: 10px; font-weight: bold;">
+              Click Here to Start Audio Playback
+            </button>
+
+            <table style="width: 100%; font-size: 12px; margin-bottom: 10px;">
+              <tr>
+                <td><strong>Sync Status:</strong> <span id="syncBadge" style="background: #e0e0e0; border: 1px solid #aaa; padding: 2px 6px; font-size: 11px;">Ready</span></td>
+                <td style="text-align: right;">
+                  <button id="btnResyncAudio" class="btn btn-small">Re-Sync Audio</button>
+                </td>
+              </tr>
+            </table>
+
+            <div style="border-top: 1px solid #ccc; padding-top: 10px; margin-top: 10px;">
+              <table style="width: 100%; font-size: 12px;">
+                <tr>
+                  <td style="width: 60px;"><strong>Volume:</strong></td>
+                  <td>
+                    <input type="range" id="volumeSlider" min="0" max="100" value="100" style="width: 100%;">
+                  </td>
+                  <td style="width: 45px; text-align: right; font-family: monospace;" id="volumeValue">100%</td>
+                </tr>
+              </table>
+            </div>
+
+            <div style="margin-top: 15px; text-align: right;">
+              <button id="btnExitParty" class="btn btn-danger btn-small">Disconnect from Room</button>
+            </div>
+          </fieldset>
+        </div>
+
+      </div>
+
+    </div>
+
+    <!-- Footer -->
+    <div class="site-footer">
+      SoundSync &bull; Peer-to-Peer Local Audio Distribution
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

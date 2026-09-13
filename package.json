@@ -1,0 +1,14 @@
+{
+  "name": "soundsync-beginner",
+  "version": "1.0.0",
+  "description": "SoundSync Beginner Edition — A clean, educational implementation of WebRTC audio broadcasting and multi-room signaling.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "qrcode": "^1.5.4",
+    "ws": "^8.18.0"
+  }
+}
